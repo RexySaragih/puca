@@ -38,6 +38,7 @@ export async function runCli(options: RunCliOptions = {}): Promise<number> {
     options.runtime ??
     createRuntime({
       cwd,
+      workers: parsed.workers,
       ...options.createRuntimeOptions,
     });
 
@@ -48,6 +49,7 @@ export async function runCli(options: RunCliOptions = {}): Promise<number> {
     timeoutMs: parsed.timeoutMs,
     includeUntracked: parsed.includeUntracked,
     verbose: parsed.verbose,
+    workers: parsed.workers,
   });
 
   return result.exitCode;

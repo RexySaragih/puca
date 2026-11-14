@@ -15,8 +15,10 @@ import { NapiMutatorEngine } from "../src/adapters/outbound/napi/NapiMutatorEngi
 import { CompositeReport } from "../src/adapters/outbound/report/CompositeReport.js";
 import { SchemaJsonFile } from "../src/adapters/outbound/report/SchemaJsonFile.js";
 import { StdioReport } from "../src/adapters/outbound/report/StdioReport.js";
+import { PooledVitestTestRunner } from "../src/adapters/outbound/vitest/PooledVitestTestRunner.js";
 import { VitestTestRunner } from "../src/adapters/outbound/vitest/VitestTestRunner.js";
 import { createRuntime } from "../src/composition/createRuntime.js";
+
 
 const require = createRequire(import.meta.url);
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -59,6 +61,29 @@ describe("createRuntime wiring", () => {
       } finally {
         process.chdir(previous);
       }
+    });
+
+    it("should wire VitestTestRunner when --workers is omitted (SC-212 / AC4)", () => {
+      const runtime = createRuntime({ cwd: repoRoot });
+      expect(runtime.testRunner).toBeInstanceOf(VitestTestRunner);
+    });
+
+    it("should wire PooledVitestTestRunner when workers is 4 (AC6)", () => {
+      const pooled = createRuntime({
+        useFakes: false,
+        cwd: repoRoot,
+        workers: 4,
+      });
+      expect(pooled.testRunner).toBeInstanceOf(PooledVitestTestRunner);
+      expect((pooled.testRunner as PooledVitestTestRunner).workers).toBe(4);
+
+      const sequential = createRuntime({
+        useFakes: false,
+        cwd: repoRoot,
+        workers: 1,
+      });
+      expect(sequential.testRunner).toBeInstanceOf(VitestTestRunner);
+      expect(sequential.testRunner).not.toBeInstanceOf(PooledVitestTestRunner);
     });
   });
 

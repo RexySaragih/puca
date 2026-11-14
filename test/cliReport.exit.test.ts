@@ -81,6 +81,7 @@ describe("CLI terminal report and exit codes", () => {
         timeoutMs: 9000,
         includeUntracked: false,
         verbose: false,
+        workers: 1,
       });
     });
 
@@ -91,6 +92,7 @@ describe("CLI terminal report and exit codes", () => {
         timeoutMs: undefined,
         includeUntracked: true,
         verbose: false,
+        workers: 1,
       });
     });
 
@@ -101,7 +103,43 @@ describe("CLI terminal report and exit codes", () => {
         timeoutMs: undefined,
         includeUntracked: false,
         verbose: true,
+        workers: 1,
       });
+    });
+
+    it("should parse --workers 4 (AC1)", () => {
+      expect(parseArgs(["--workers", "4"]).workers).toBe(4);
+      expect(parseArgs(["--workers=4"]).workers).toBe(4);
+    });
+
+    it("should default workers to 1 when omitted (AC2)", () => {
+      expect(parseArgs([]).workers).toBe(1);
+    });
+
+    it("should refuse invalid --workers (AC3)", async () => {
+      const { runCli } = await import("../src/cli.js");
+      const cases: Array<{ argv: string[]; match: RegExp }> = [
+        { argv: ["--workers", "0"], match: /--workers/ },
+        { argv: ["--workers", "1.5"], match: /--workers/ },
+        { argv: ["--workers", "foo"], match: /--workers/ },
+        { argv: ["--workers"], match: /--workers/ },
+      ];
+
+      for (const { argv, match } of cases) {
+        let stderr = "";
+        const prevWrite = process.stderr.write.bind(process.stderr);
+        process.stderr.write = ((chunk: string | Uint8Array) => {
+          stderr += String(chunk);
+          return true;
+        }) as typeof process.stderr.write;
+        try {
+          const code = await runCli({ argv, cwd: repoRoot });
+          expect(code, argv.join(" ")).toBe(2);
+          expect(stderr, argv.join(" ")).toMatch(match);
+        } finally {
+          process.stderr.write = prevWrite;
+        }
+      }
     });
   });
 
@@ -439,14 +477,45 @@ describe("CLI terminal report and exit codes", () => {
       expect(raw.files["src/add.ts"]?.language).toBe("typescript");
       expect(raw.files["src/add.ts"]?.source).toBe(sourceText);
 
-      const statuses = raw.files["src/add.ts"]!.mutants.map((m) => m.status);
-      expect(statuses).toEqual([
-        "Survived",
-        "Killed",
-        "Timeout",
-        "NoCoverage",
-        "RuntimeError",
-      ]);
+      const mutants = raw.files["src/add.ts"]!.mutants;
+      const ids = mutants.map((m) => m.id);
+      expect(ids).toEqual([...ids].sort((a, b) => a.localeCompare(b)));
+      expect(mutants.map((m) => m.status)).toEqual(
+        [...result.statuses]
+          .sort((a, b) => a.site.id.localeCompare(b.site.id))
+          .map((entry) => entry.status),
+      );
+    });
+
+    it("should sort a file's mutants by site.id when inserted in reverse order (AC1)", async () => {
+      const sourceFile = toAbsolutePath(path.join(tempDir, "src/sort.ts"));
+      const sourceText = "export const n = 1;\n";
+      await fs.mkdir(path.join(tempDir, "src"), { recursive: true });
+      await fs.writeFile(sourceFile, sourceText, "utf8");
+      const files = new InMemoryFiles(tempDir);
+      files.seed(sourceFile, sourceText);
+      const schema = new SchemaJsonFile(files, tempDir);
+
+      // Lexicographic ids: ":10:" < ":20:" (avoid ":5:" vs ":20:" digit trap).
+      const later = siteFor(tempDir, sourceFile, 20, "Literal", "1", "0");
+      const earlier = siteFor(tempDir, sourceFile, 10, "Literal", "0", "1");
+      expect(earlier.id.localeCompare(later.id)).toBeLessThan(0);
+      const result: SessionResult = {
+        statuses: [
+          { site: later, status: "Survived" },
+          { site: earlier, status: "Killed", killedBy: "t" },
+        ],
+        exitCode: 1,
+      };
+      const jsonPath = path.join(tempDir, "sorted.json");
+
+      await schema.writeJson(jsonPath, result);
+      const raw = JSON.parse(await fs.readFile(jsonPath, "utf8")) as {
+        files: Record<string, { mutants: Array<{ id: string; status: string }> }>;
+      };
+      const mutants = raw.files["src/sort.ts"]!.mutants;
+      expect(mutants.map((m) => m.id)).toEqual([earlier.id, later.id]);
+      expect(mutants.map((m) => m.status)).toEqual(["Killed", "Survived"]);
     });
 
     it("should write JSON through the use case when jsonPath is set", async () => {
@@ -490,6 +559,43 @@ describe("CLI terminal report and exit codes", () => {
       expect(doc.schemaVersion).toBe("2");
       expect(doc.files).toEqual({});
     });
+  });
+});
+
+describe("verbose recycle footer on terminal (AC2)", () => {
+  it("should print recycle footer on stderr while Survived lines stay on UX-001 stdout", async () => {
+    const cwd = path.join(repoRoot, "tmp-verbose-recycle");
+    const source = toAbsolutePath(path.join(cwd, "src/a.ts"));
+    const site = siteFor(cwd, source, 1, "Arithmetic", "+", "-");
+    const out = captureStream();
+    const err = captureStream();
+    const report = new StdioReport({
+      cwd,
+      stdout: out.stream,
+      stderr: err.stream,
+    });
+
+    const result: SessionResult = {
+      statuses: [{ site, status: "Survived" }],
+      exitCode: 1,
+      verboseFooter: "Worker recycles (timeout+RSS): 2",
+    };
+
+    report.writeMutantResult?.(result.statuses[0]!, {
+      index: 1,
+      total: 1,
+      counts: {
+        killed: 0,
+        survived: 1,
+        timeout: 0,
+        error: 0,
+        noCoverage: 0,
+      },
+    });
+    await report.writeTerminal(result);
+
+    expect(out.text()).toMatch(/Survived/);
+    expect(err.text()).toContain("Worker recycles (timeout+RSS): 2");
   });
 });
 

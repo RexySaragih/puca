@@ -83,7 +83,12 @@ puca --mutate 'src/**/*.ts' --json ./mutation-report.json
 
 # Diagnostics: selected files, mutator histogram, disable-comment omissions, Vitest respawns
 puca --verbose
+
+# Parallel scoring workers (default 1 = Phase 1 in-process path; N>=2 fork pool)
+puca --mutate 'src/**/*.ts' --workers 4
 ```
+
+Invalid `--workers` (`0`, floats, non-integers, missing value) → exit **2** with a stderr diagnostic naming `--workers`.
 
 ### Fixture smoke
 

@@ -80,10 +80,13 @@ export class SchemaJsonFile implements ReportPort {
     for (const [rel, mutants] of byFile) {
       const absolute = mutants[0]!.site.file;
       const source = await this.files.readUtf8(absolute);
+      const sorted = [...mutants].sort((a, b) =>
+        a.site.id.localeCompare(b.site.id),
+      );
       files[rel] = {
         language: LANGUAGE,
         source,
-        mutants: mutants.map((entry) => toSchemaMutant(entry)),
+        mutants: sorted.map((entry) => toSchemaMutant(entry)),
       };
     }
 

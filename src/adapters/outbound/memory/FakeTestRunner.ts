@@ -31,9 +31,14 @@ export class FakeTestRunner implements TestRunnerPort {
   relatedResult: RelatedRunResult = { kind: "passed" };
   readonly runRelatedCalls: MutantRunRequest[] = [];
   readonly invalidateCalls: string[] = [];
+  readonly setBufferCalls: Array<{
+    readonly file: AbsolutePath;
+    readonly source: string | null;
+  }> = [];
   respawnCount = 0;
   closed = false;
   testTimeoutMs = DEFAULT_TEST_TIMEOUT_MS;
+  recycleCount = 0;
 
   private importsBySpec = new Map<string, readonly string[]>();
   private setupModules: string[] = [];
@@ -78,6 +83,9 @@ export class FakeTestRunner implements TestRunnerPort {
     this.closed = false;
     this.runRelatedCalls.length = 0;
     this.invalidateCalls.length = 0;
+    this.setBufferCalls.length = 0;
+    this.maxInFlightRelated = 0;
+    this.inFlightRelated = 0;
     this.buffers = overlay.buffers;
     return SESSION;
   }
@@ -105,6 +113,7 @@ export class FakeTestRunner implements TestRunnerPort {
   }
 
   setBuffer(file: AbsolutePath, source: string | null): void {
+    this.setBufferCalls.push({ file, source });
     setRamBuffer(this.buffers, file, source);
   }
 
@@ -116,18 +125,38 @@ export class FakeTestRunner implements TestRunnerPort {
     return this.testTimeoutMs;
   }
 
+  /** Optional delay before resolving (tests concurrent overlap). */
+  relatedDelayMs = 0;
+  /** Peak overlapping runRelated calls observed. */
+  maxInFlightRelated = 0;
+  private inFlightRelated = 0;
+
   async runRelated(mutant: MutantRunRequest): Promise<RelatedRunResult> {
     this.runRelatedCalls.push(mutant);
-    const next = this.relatedBehaviorQueue.shift();
-    if (next === "hang") {
-      return new Promise(() => {
-        /* never settles — outer timer classifies Timeout */
-      });
+    this.inFlightRelated += 1;
+    this.maxInFlightRelated = Math.max(
+      this.maxInFlightRelated,
+      this.inFlightRelated,
+    );
+    try {
+      if (this.relatedDelayMs > 0) {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, this.relatedDelayMs);
+        });
+      }
+      const next = this.relatedBehaviorQueue.shift();
+      if (next === "hang") {
+        return new Promise(() => {
+          /* never settles — outer timer classifies Timeout */
+        });
+      }
+      if (next != null) {
+        return next;
+      }
+      return this.relatedResult;
+    } finally {
+      this.inFlightRelated -= 1;
     }
-    if (next != null) {
-      return next;
-    }
-    return this.relatedResult;
   }
 
   async respawn(): Promise<RunnerSession> {

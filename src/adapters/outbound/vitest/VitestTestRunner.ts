@@ -14,6 +14,7 @@ import {
 } from "./collectImportGraph.js";
 import {
   clearRamBuffer,
+  normalizeModulePath,
   pucaRamPlugin,
   setRamBuffer,
 } from "./pucaRamPlugin.js";
@@ -65,6 +66,7 @@ export interface VitestLike extends VitestGraphHost {
   readonly config?: {
     readonly browser?: { readonly enabled?: boolean } | boolean;
     readonly testTimeout?: number;
+    readonly globalSetup?: readonly string[] | string;
   };
   invalidateFile?(filepath: string): void;
   runTestFiles?(
@@ -241,7 +243,9 @@ export class VitestTestRunner implements TestRunnerPort {
     }
     try {
       const result = await this.vitest.runTestFiles([...mutant.relatedSpecs]);
-      return classifyVitestRun(result);
+      // Vitest accumulates prior testModules on the session; only classify
+      // modules from this relatedSpecs run (stale failures would mis-attribute killedBy).
+      return classifyVitestRun(result, mutant.relatedSpecs);
     } catch (error) {
       return {
         kind: "error",
@@ -273,9 +277,31 @@ export class VitestTestRunner implements TestRunnerPort {
     }
     clearRamBuffer(this.overlay.buffers, file);
   }
+
+  /**
+   * Vitest `globalSetup` from the active session (ADR-017 / pool refuse).
+   * Prefers root project config; falls back to top-level vitest.config.
+   */
+  peekGlobalSetup(): unknown {
+    if (this.vitest == null) {
+      return undefined;
+    }
+    try {
+      const project = this.vitest.getRootProject();
+      if (project?.config?.globalSetup != null) {
+        return project.config.globalSetup;
+      }
+    } catch {
+      // getRootProject may throw if session is mid-close.
+    }
+    return this.vitest.config?.globalSetup;
+  }
 }
 
-function classifyVitestRun(result: VitestRunResultLike): RelatedRunResult {
+function classifyVitestRun(
+  result: VitestRunResultLike,
+  relatedSpecs?: readonly string[],
+): RelatedRunResult {
   if (result.unhandledErrors.length > 0) {
     const first = result.unhandledErrors[0];
     return {
@@ -284,7 +310,18 @@ function classifyVitestRun(result: VitestRunResultLike): RelatedRunResult {
     };
   }
 
+  const related =
+    relatedSpecs != null
+      ? new Set(relatedSpecs.map((spec) => normalizeModulePath(spec)))
+      : null;
+
   for (const mod of result.testModules) {
+    if (related != null) {
+      const moduleId = mod.moduleId != null ? normalizeModulePath(mod.moduleId) : "";
+      if (moduleId.length === 0 || !related.has(moduleId)) {
+        continue;
+      }
+    }
     if (mod.ok()) {
       continue;
     }

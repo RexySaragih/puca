@@ -28,6 +28,8 @@ export interface MutantRunRequest {
   readonly file: AbsolutePath;
   readonly mutatedSource: string;
   readonly relatedSpecs: readonly string[];
+  /** site.id — required for pool IPC (N>=2). */
+  readonly mutantId?: string;
 }
 
 /** Source → related specs; globalSetup-only set for a one-shot respawn. */
@@ -58,4 +60,9 @@ export interface TestRunnerPort {
   runRelated(mutant: MutantRunRequest): Promise<RelatedRunResult>;
   respawn(): Promise<RunnerSession>;
   close(): Promise<void>;
+  /**
+   * Pool path (N>=2): timeout kills + RSS recycles for `--verbose`.
+   * Phase 1 / Fake runners omit or return 0.
+   */
+  readonly recycleCount?: number;
 }

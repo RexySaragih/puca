@@ -81,7 +81,7 @@ flowchart TD
 | Targeting | Default: git dirty `.ts`/`.tsx` vs HEAD (untracked ignored; stderr skip notice). `--include-untracked` adds untracked files. Override: `--mutate <glob>` (tree walk). Hard excludes never mutate. |
 | Mutator | Oxc (Rust) via NAPI: arithmetic, equality, boolean, logical, conditional predicates. Lazy byte-offset apply. |
 | Disable | `// puca-disable-next-line`, `// puca-disable` |
-| Session | One Vitest keep-alive; Vite RAM plugin; sequential mutants; outer timeout + respawn. `--verbose` lists files, mutators, disable omissions, respawns. |
+| Session | One Vitest keep-alive by default (`--workers 1` / omit). Vite RAM plugin; sequential mutants; outer timeout + respawn. `--workers N` (N≥2) opts into a fork pool of isolated keep-alives (Phase 2). `--verbose` lists files, mutators, disable omissions, respawns/recycles. |
 | Report | Terminal (`file:line:col` + `-`/`+` lines + five buckets); optional mutation-testing-report-schema JSON (`puca/schema/mutation-report.json`) |
 | Exits | 0 / 1 / 2 as in [README.md](./README.md) |
 

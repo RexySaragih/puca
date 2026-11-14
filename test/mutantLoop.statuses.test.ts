@@ -318,3 +318,129 @@ describe("Sequential mutant loop statuses", () => {
     });
   });
 });
+
+describe("Concurrent mutant scoring (workers >= 2)", () => {
+  describe("when workers is 1 and a hang occurs (AC1)", () => {
+    it("should Timeout and respawn once (Phase 1 path)", async () => {
+      const { useCase, mutator, testRunner, files, sourceLocator } =
+        createHarness();
+      const source = abs("src/foo.ts");
+      const site = siteFor(source, 48, "Arithmetic", "+", "-");
+      await seedCoveredFile({
+        files,
+        mutator,
+        testRunner,
+        sourceLocator,
+        sites: [site],
+        sourceFile: source,
+      });
+      testRunner.queueRelatedBehaviors("hang");
+
+      const result = await useCase.execute({ cwd, workers: 1, timeoutMs: 40 });
+
+      expect(result.statuses).toEqual([{ site, status: "Timeout" }]);
+      expect(testRunner.respawnCount).toBe(1);
+    });
+  });
+
+  describe("when workers is 2 with two covered sites (AC2)", () => {
+    it("should overlap runRelated and never call setBuffer", async () => {
+      const { useCase, mutator, testRunner, files, sourceLocator } =
+        createHarness();
+      const source = abs("src/foo.ts");
+      const siteA = siteFor(source, 48, "Arithmetic", "+", "-");
+      const siteB = siteFor(source, 48, "Arithmetic", "+", "*");
+      await seedCoveredFile({
+        files,
+        mutator,
+        testRunner,
+        sourceLocator,
+        sites: [siteA, siteB],
+        sourceFile: source,
+      });
+      testRunner.relatedDelayMs = 40;
+      testRunner.relatedResult = { kind: "passed" };
+
+      const result = await useCase.execute({ cwd, workers: 2 });
+
+      expect(result.statuses).toHaveLength(2);
+      expect(testRunner.maxInFlightRelated).toBeGreaterThanOrEqual(2);
+      expect(testRunner.setBufferCalls).toHaveLength(0);
+      expect(testRunner.respawnCount).toBe(0);
+    });
+  });
+
+  describe("when a file has no related specs (AC3)", () => {
+    it("should mark NoCoverage without calling runRelated", async () => {
+      const { useCase, mutator, testRunner, files, sourceLocator } =
+        createHarness();
+      const source = abs("src/orphan.ts");
+      const site = siteFor(source, 0, "Arithmetic", "+", "-");
+      sourceLocator.setCandidates([source]);
+      files.seed(source, "export const x = 1 + 2;\n");
+      mutator.setSites(source, [site]);
+      testRunner.setAllSpecs([]);
+      testRunner.setStaticImports({});
+      testRunner.baselineResult = { ok: true };
+
+      const result = await useCase.execute({ cwd, workers: 2 });
+
+      expect(result.statuses).toEqual([{ site, status: "NoCoverage" }]);
+      expect(testRunner.runRelatedCalls).toHaveLength(0);
+    });
+  });
+
+  describe("when workers is 2 and runRelated returns Timeout (AC4)", () => {
+    it("should not call respawn", async () => {
+      const { useCase, mutator, testRunner, files, sourceLocator } =
+        createHarness();
+      const source = abs("src/foo.ts");
+      const site = siteFor(source, 48, "Arithmetic", "+", "-");
+      await seedCoveredFile({
+        files,
+        mutator,
+        testRunner,
+        sourceLocator,
+        sites: [site],
+        sourceFile: source,
+      });
+      testRunner.relatedResult = { kind: "timeout" };
+
+      const result = await useCase.execute({ cwd, workers: 2 });
+
+      expect(result.statuses).toEqual([{ site, status: "Timeout" }]);
+      expect(testRunner.respawnCount).toBe(0);
+    });
+  });
+
+  describe("when verbose and workers >= 2", () => {
+    it("should report worker recycle count instead of Vitest respawns", async () => {
+      const { useCase, mutator, testRunner, files, sourceLocator } =
+        createHarness();
+      const source = abs("src/foo.ts");
+      const site = siteFor(source, 48, "ArithmeticOperator", "+", "-");
+      await seedCoveredFile({
+        files,
+        mutator,
+        testRunner,
+        sourceLocator,
+        sites: [site],
+        sourceFile: source,
+      });
+      testRunner.recycleCount = 3;
+      testRunner.relatedResult = { kind: "passed" };
+
+      const result = await useCase.execute({
+        cwd,
+        workers: 2,
+        verbose: true,
+      });
+
+      expect(result.verboseFooter).toContain(
+        "Worker recycles (timeout+RSS): 3",
+      );
+      expect(result.verboseFooter).not.toContain("Vitest respawns");
+    });
+  });
+});
+

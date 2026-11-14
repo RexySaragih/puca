@@ -81,6 +81,18 @@ export class RunMutationSessionUseCase implements RunMutationSession {
     await this.deps.testRunner.startSession({ buffers: new Map() });
     try {
       return await this.runAfterSession(candidates, input);
+    } catch (error) {
+      if (isRunnerRefuse(error)) {
+        return this.reportResult(
+          {
+            statuses: [],
+            exitCode: EXIT_REFUSE,
+            message: error.message,
+          },
+          input.jsonPath,
+        );
+      }
+      throw error;
     } finally {
       await this.deps.testRunner.close();
     }
@@ -90,6 +102,7 @@ export class RunMutationSessionUseCase implements RunMutationSession {
     candidates: readonly AbsolutePath[],
     input: MutationSessionInput,
   ): Promise<SessionResult> {
+    const workers = input.workers ?? 1;
     const reverse = await this.deps.testRunner.buildReverseMap(candidates);
 
     const discovered = await this.discoverCandidateSites(candidates, reverse);
@@ -110,7 +123,8 @@ export class RunMutationSessionUseCase implements RunMutationSession {
       );
     }
 
-    if (shouldRespawnForGlobalSetup(candidates, reverse)) {
+    // N>=2: pool adapter refuses globalSetup (ADR-017). N=1 keeps one-shot respawn.
+    if (workers < 2 && shouldRespawnForGlobalSetup(candidates, reverse)) {
       await this.respawnRunner();
     }
 
@@ -122,6 +136,7 @@ export class RunMutationSessionUseCase implements RunMutationSession {
     const statuses = await this.scoreDiscovered(
       discovered,
       outerTimeoutMs,
+      workers,
     );
     return this.reportResult(
       {
@@ -129,7 +144,12 @@ export class RunMutationSessionUseCase implements RunMutationSession {
         exitCode: exitCodeForStatuses(statuses),
         verboseFooter:
           input.verbose === true
-            ? formatVerboseFooter(discovered, this.respawns)
+            ? formatVerboseFooter(
+                discovered,
+                this.respawns,
+                workers,
+                this.deps.testRunner.recycleCount ?? 0,
+              )
             : undefined,
       },
       input.jsonPath,
@@ -139,6 +159,7 @@ export class RunMutationSessionUseCase implements RunMutationSession {
   private async scoreDiscovered(
     discovered: readonly DiscoveredFile[],
     outerTimeoutMs: number,
+    workers: number,
   ): Promise<Mutant[]> {
     const total = countAllSites(discovered);
     this.deps.report.writeSessionStart?.({
@@ -147,50 +168,125 @@ export class RunMutationSessionUseCase implements RunMutationSession {
       timeoutMs: outerTimeoutMs,
     });
 
+    if (workers >= 2) {
+      return this.scoreDiscoveredConcurrent(discovered, total, workers);
+    }
+    return this.scoreDiscoveredSequential(discovered, total, outerTimeoutMs);
+  }
+
+  private async scoreDiscoveredSequential(
+    discovered: readonly DiscoveredFile[],
+    total: number,
+    outerTimeoutMs: number,
+  ): Promise<Mutant[]> {
     const statuses: Mutant[] = [];
-    const counts = {
-      killed: 0,
-      survived: 0,
-      timeout: 0,
-      error: 0,
-      noCoverage: 0,
-    };
+    const counts = emptyBuckets();
 
     for (const entry of discovered) {
       if (entry.related.length === 0) {
         for (const site of entry.sites) {
-          const scored: Mutant = { site, status: "NoCoverage" };
-          bumpBucket(counts, scored.status);
-          statuses.push(scored);
-          this.deps.report.writeMutantResult?.(scored, {
-            index: statuses.length,
+          this.pushScored(
+            statuses,
+            counts,
             total,
-            counts: { ...counts },
-          });
+            { site, status: "NoCoverage" },
+          );
         }
         continue;
       }
       for (const site of entry.sites) {
-        const scored = await this.scoreOneMutant(
+        const scored = await this.scoreOneMutantInProcess(
           entry.file,
           entry.originalSource,
           site,
           entry.related,
           outerTimeoutMs,
         );
-        bumpBucket(counts, scored.status);
-        statuses.push(scored);
-        this.deps.report.writeMutantResult?.(scored, {
-          index: statuses.length,
-          total,
-          counts: { ...counts },
-        });
+        this.pushScored(statuses, counts, total, scored);
       }
     }
     return statuses;
   }
 
-  private async scoreOneMutant(
+  /**
+   * N>=2: promise pool — parent apply + runRelated only (child owns overlay).
+   * No setBuffer / invalidateFile / respawn in the parent use case.
+   */
+  private async scoreDiscoveredConcurrent(
+    discovered: readonly DiscoveredFile[],
+    total: number,
+    workers: number,
+  ): Promise<Mutant[]> {
+    const statuses: Mutant[] = new Array(total);
+    const counts = emptyBuckets();
+    let nextIndex = 0;
+
+    type Job = {
+      readonly slot: number;
+      readonly file: AbsolutePath;
+      readonly originalSource: string;
+      readonly site: Site;
+      readonly related: readonly string[];
+    };
+
+    const jobs: Job[] = [];
+    let slot = 0;
+    for (const entry of discovered) {
+      for (const site of entry.sites) {
+        jobs.push({
+          slot,
+          file: entry.file,
+          originalSource: entry.originalSource,
+          site,
+          related: entry.related,
+        });
+        slot += 1;
+      }
+    }
+
+    const runJob = async (job: Job): Promise<void> => {
+      let scored: Mutant;
+      if (job.related.length === 0) {
+        scored = { site: job.site, status: "NoCoverage" };
+      } else {
+        scored = await this.scoreOneMutantPooled(
+          job.file,
+          job.originalSource,
+          job.site,
+          job.related,
+        );
+      }
+      statuses[job.slot] = scored;
+      bumpBucket(counts, scored.status);
+      // Progress index is completion order for streaming UX.
+      nextIndex += 1;
+      this.deps.report.writeMutantResult?.(scored, {
+        index: nextIndex,
+        total,
+        counts: { ...counts },
+      });
+    };
+
+    await runPromisePool(jobs, workers, runJob);
+    return statuses;
+  }
+
+  private pushScored(
+    statuses: Mutant[],
+    counts: BucketState,
+    total: number,
+    scored: Mutant,
+  ): void {
+    bumpBucket(counts, scored.status);
+    statuses.push(scored);
+    this.deps.report.writeMutantResult?.(scored, {
+      index: statuses.length,
+      total,
+      counts: { ...counts },
+    });
+  }
+
+  private async scoreOneMutantInProcess(
     file: AbsolutePath,
     originalSource: string,
     site: Site,
@@ -213,6 +309,7 @@ export class RunMutationSessionUseCase implements RunMutationSession {
           file,
           mutatedSource,
           relatedSpecs,
+          mutantId: site.id,
         }),
         outerTimeoutMs,
       );
@@ -228,6 +325,33 @@ export class RunMutationSessionUseCase implements RunMutationSession {
     } finally {
       this.deps.testRunner.setBuffer(file, null);
       this.deps.testRunner.invalidateFile(file);
+    }
+  }
+
+  private async scoreOneMutantPooled(
+    file: AbsolutePath,
+    originalSource: string,
+    site: Site,
+    relatedSpecs: readonly string[],
+  ): Promise<Mutant> {
+    let mutatedSource: string;
+    try {
+      mutatedSource = await this.deps.mutator.apply(originalSource, site);
+    } catch {
+      return { site, status: "RuntimeError" };
+    }
+
+    try {
+      const result = await this.deps.testRunner.runRelated({
+        file,
+        mutatedSource,
+        relatedSpecs,
+        mutantId: site.id,
+      });
+      // Pool adapter owns timeout/respawn — use case never respawns for N>=2.
+      return classifyRelatedResult(site, result);
+    } catch {
+      return { site, status: "RuntimeError" };
     }
   }
 
@@ -366,13 +490,62 @@ function summarizeDiscover(discovered: readonly DiscoveredFile[]): {
 function formatVerboseFooter(
   discovered: readonly DiscoveredFile[],
   respawnCount: number,
+  workers: number,
+  recycleCount: number,
 ): string {
   const { histogramLine, disabledCount } = summarizeDiscover(discovered);
-  return [
+  const lines = [
     `Mutators: ${histogramLine}`,
     `Disable-comment sites omitted: ${String(disabledCount)}`,
-    `Vitest respawns: ${String(respawnCount)}`,
-  ].join("\n");
+  ];
+  if (workers >= 2) {
+    lines.push(`Worker recycles (timeout+RSS): ${String(recycleCount)}`);
+  } else {
+    lines.push(`Vitest respawns: ${String(respawnCount)}`);
+  }
+  return lines.join("\n");
+}
+
+type BucketState = {
+  killed: number;
+  survived: number;
+  timeout: number;
+  error: number;
+  noCoverage: number;
+};
+
+function emptyBuckets(): BucketState {
+  return {
+    killed: 0,
+    survived: 0,
+    timeout: 0,
+    error: 0,
+    noCoverage: 0,
+  };
+}
+
+async function runPromisePool<T>(
+  items: readonly T[],
+  concurrency: number,
+  worker: (item: T) => Promise<void>,
+): Promise<void> {
+  if (items.length === 0) {
+    return;
+  }
+  const limit = Math.max(1, concurrency);
+  let next = 0;
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      const item = items[index];
+      if (item === undefined) {
+        return;
+      }
+      await worker(item);
+    }
+  });
+  await Promise.all(runners);
 }
 
 function lookupRelated(
@@ -503,6 +676,15 @@ function classifyRelatedResult(site: Site, result: RelatedRunResult): Mutant {
     case "error":
       return { site, status: "RuntimeError" };
   }
+}
+
+/** Duck-type adapter refuse (exit 2) without importing adapter modules. */
+function isRunnerRefuse(error: unknown): error is Error {
+  return (
+    error instanceof Error &&
+    "exitCode" in error &&
+    (error as { exitCode: unknown }).exitCode === 2
+  );
 }
 
 async function raceWithTimeout<T>(

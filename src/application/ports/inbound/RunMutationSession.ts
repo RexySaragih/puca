@@ -8,6 +8,11 @@ export interface MutationSessionInput {
   /** Git-dirty default only. Ignored when mutateGlob is set (--mutate already walks the tree). */
   readonly includeUntracked?: boolean;
   readonly verbose?: boolean;
+  /**
+   * Parallel scoring workers. Default 1 = Phase 1 in-process VitestTestRunner.
+   * N>=2 uses PooledVitestTestRunner (po_2a0301).
+   */
+  readonly workers?: number;
 }
 
 /**

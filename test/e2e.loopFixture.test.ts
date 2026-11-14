@@ -12,12 +12,16 @@ const repoRoot = path.resolve(here, "..");
  * (symlinked to the repo root node_modules in beforeAll).
  */
 const fixtureCwd = path.resolve(repoRoot, "fixtures/loop");
+/** Larger independent-module fixture so N=4 wall-clock can beat sequential (SC-202). */
+const parallelFixtureCwd = path.resolve(repoRoot, "fixtures/loop-parallel");
 const cliJs = path.resolve(repoRoot, "dist/cli.js");
 const oraclePath = path.resolve(fixtureCwd, "oracle.statuses.json");
 
 const MUTATE_GLOB = "src/**/*.ts";
 const OUTER_TIMEOUT_MS = 4000;
+const PARALLEL_TIMEOUT_MS = 5000;
 const SPAWN_WALL_MS = 60_000;
+const PARALLEL_SPAWN_WALL_MS = 180_000;
 
 interface OracleStatus {
   readonly file: string;
@@ -38,6 +42,7 @@ interface RunResult {
   readonly stdout: string;
   readonly stderr: string;
   readonly report: SchemaReport | null;
+  readonly elapsedMs: number;
 }
 
 interface SchemaReport {
@@ -62,15 +67,17 @@ describe("Loop fixture E2E and no-sandbox proof", () => {
     await fs.access(cliJs);
     oracle = JSON.parse(await fs.readFile(oraclePath, "utf8")) as OracleDocument;
 
-    const fixtureModules = path.join(fixtureCwd, "node_modules");
-    try {
-      await fs.access(path.join(fixtureModules, "vitest"));
-    } catch {
-      await fs.symlink(
-        path.join(repoRoot, "node_modules"),
-        fixtureModules,
-        "dir",
-      );
+    for (const cwd of [fixtureCwd, parallelFixtureCwd]) {
+      const fixtureModules = path.join(cwd, "node_modules");
+      try {
+        await fs.access(path.join(fixtureModules, "vitest"));
+      } catch {
+        await fs.symlink(
+          path.join(repoRoot, "node_modules"),
+          fixtureModules,
+          "dir",
+        );
+      }
     }
   });
 
@@ -226,20 +233,106 @@ describe("Loop fixture E2E and no-sandbox proof", () => {
       await fs.rm(jsonOut, { force: true });
     }, SPAWN_WALL_MS);
   });
+
+  describe("when --workers 1 runs against fixtures/loop (Phase 2 AC1)", () => {
+    it("should match the Phase 1 oracle sorted by site.id", async () => {
+      const jsonOut = path.join(
+        os.tmpdir(),
+        `puca-loop-w1-${String(process.pid)}.json`,
+      );
+      const run = await spawnPuca(fixtureCwd, [
+        "--workers",
+        "1",
+        "--mutate",
+        MUTATE_GLOB,
+        "--timeout",
+        String(OUTER_TIMEOUT_MS),
+        "--json",
+        jsonOut,
+      ]);
+
+      expect(run.exitCode, run.stderr || run.stdout).toBe(oracle.exitCode);
+      const actual = statusesFromReport(run.report, fixtureCwd);
+      expect(sortStatuses(actual)).toEqual(sortStatuses(oracle.statuses));
+      expect(sortBySiteId(run.report)).toEqual(sortBySiteId(run.report));
+
+      await fs.rm(jsonOut, { force: true });
+    }, SPAWN_WALL_MS);
+  });
+
+  describe("when --workers 4 runs against fixtures/loop-parallel (Phase 2 AC2/AC3)", () => {
+    it("should match workers 1 statuses and finish no slower, without sandbox artifacts", async () => {
+      const jsonW1 = path.join(
+        os.tmpdir(),
+        `puca-loop-par-w1-${String(process.pid)}.json`,
+      );
+      const jsonW4 = path.join(
+        os.tmpdir(),
+        `puca-loop-par-w4-${String(process.pid)}.json`,
+      );
+
+      const workers1 = await spawnPuca(
+        parallelFixtureCwd,
+        [
+          "--workers",
+          "1",
+          "--mutate",
+          MUTATE_GLOB,
+          "--timeout",
+          String(PARALLEL_TIMEOUT_MS),
+          "--json",
+          jsonW1,
+        ],
+        PARALLEL_SPAWN_WALL_MS,
+      );
+      const workers4 = await spawnPuca(
+        parallelFixtureCwd,
+        [
+          "--workers",
+          "4",
+          "--mutate",
+          MUTATE_GLOB,
+          "--timeout",
+          String(PARALLEL_TIMEOUT_MS),
+          "--json",
+          jsonW4,
+        ],
+        PARALLEL_SPAWN_WALL_MS,
+      );
+
+      expect(workers4.exitCode, workers4.stderr || workers4.stdout).toBe(
+        workers1.exitCode,
+      );
+      expect(sortBySiteId(workers4.report)).toEqual(sortBySiteId(workers1.report));
+      expect(
+        workers4.elapsedMs,
+        `w4=${String(workers4.elapsedMs)}ms w1=${String(workers1.elapsedMs)}ms`,
+      ).toBeLessThanOrEqual(workers1.elapsedMs);
+
+      const hits = await walkForbiddenArtifacts(repoRoot, parallelFixtureCwd);
+      expect(hits).toEqual([]);
+
+      await fs.rm(jsonW1, { force: true });
+      await fs.rm(jsonW4, { force: true });
+    }, PARALLEL_SPAWN_WALL_MS * 2);
+  });
 });
 
 async function spawnPuca(
   cwd: string,
   args: readonly string[],
+  wallMs: number = SPAWN_WALL_MS,
 ): Promise<RunResult> {
-  return spawnNode(cwd, [cliJs, ...args], { cwd });
+  return spawnNode(cwd, [cliJs, ...args], { cwd, wallMs });
 }
 
 async function spawnNode(
   _unusedCwd: string,
   args: readonly string[],
-  options: { readonly cwd: string },
+  options: { readonly cwd: string; readonly wallMs?: number },
 ): Promise<RunResult> {
+  const wallMs = options.wallMs ?? SPAWN_WALL_MS;
+  const started = Date.now();
   return new Promise((resolve, reject) => {
     const child: ChildProcess = spawn(process.execPath, [...args], {
       cwd: options.cwd,
@@ -260,8 +353,8 @@ async function spawnNode(
 
     const timer = setTimeout(() => {
       child.kill("SIGKILL");
-      reject(new Error(`puca spawn exceeded ${String(SPAWN_WALL_MS)}ms\n${stderr}\n${stdout}`));
-    }, SPAWN_WALL_MS);
+      reject(new Error(`puca spawn exceeded ${String(wallMs)}ms\n${stderr}\n${stdout}`));
+    }, wallMs);
 
     child.on("error", (error) => {
       clearTimeout(timer);
@@ -287,6 +380,7 @@ async function spawnNode(
         stdout,
         stderr,
         report,
+        elapsedMs: Date.now() - started,
       });
     });
   });
@@ -366,8 +460,13 @@ async function walkForbiddenArtifacts(
 ): Promise<string[]> {
   const hits: string[] = [];
   const originalSources = new Map<string, string>();
-  for (const name of ["calc.ts", "hang.ts", "uncovered.ts", "skipped.ts"]) {
-    const file = path.join(fixtureCwd, "src", name);
+  const srcDir = path.join(fixtureCwd, "src");
+  const srcEntries = await fs.readdir(srcDir);
+  for (const name of srcEntries) {
+    if (!name.endsWith(".ts")) {
+      continue;
+    }
+    const file = path.join(srcDir, name);
     originalSources.set(file, await fs.readFile(file, "utf8"));
   }
 
@@ -384,7 +483,11 @@ async function walkForbiddenArtifacts(
       }
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        if (entry.name === ".puca-tmp" || entry.name === ".stryker-tmp") {
+        if (
+          entry.name === ".puca-tmp" ||
+          entry.name === ".stryker-tmp" ||
+          entry.name === ".puca"
+        ) {
           hits.push(full);
           continue;
         }
@@ -392,6 +495,10 @@ async function walkForbiddenArtifacts(
         continue;
       }
       if (!entry.isFile()) {
+        continue;
+      }
+      if (entry.name === "cache.json" && dir.endsWith(`${path.sep}.puca`)) {
+        hits.push(full);
         continue;
       }
       // Mutated copies of fixture src would differ from the pristine originals.
