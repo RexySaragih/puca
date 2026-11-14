@@ -1,0 +1,233 @@
+import path from "node:path";
+import type {
+  BucketCounts,
+  MutantProgress,
+  ReportPort,
+  SessionStartInfo,
+} from "../../../application/ports/outbound/ReportPort.js";
+import type { Mutant, SessionResult } from "../../../domain/mutant.js";
+
+const DETAIL_STATUSES = new Set(["Survived", "Timeout", "RuntimeError"]);
+const DETAIL_ORIGINAL_MAX = 80;
+
+export interface StdioReportOptions {
+  readonly cwd?: string;
+  readonly stdout?: NodeJS.WritableStream;
+  readonly stderr?: NodeJS.WritableStream;
+}
+
+/**
+ * Terminal reporter: realtime mutant lines + five-bucket summary.
+ * Survived/Timeout/Error get status + mutator + diff; Killed/NoCoverage stay compact.
+ */
+export class StdioReport implements ReportPort {
+  private readonly cwd: string;
+  private readonly stdout: NodeJS.WritableStream;
+  private readonly stderr: NodeJS.WritableStream;
+  private streamedMutants = false;
+  private progressDirty = false;
+
+  constructor(options: StdioReportOptions = {}) {
+    this.cwd = options.cwd ?? process.cwd();
+    this.stdout = options.stdout ?? process.stdout;
+    this.stderr = options.stderr ?? process.stderr;
+  }
+
+  writeNotice(line: string): void {
+    this.clearProgressLine();
+    this.stderr.write(`${line}\n`);
+  }
+
+  writeSessionStart(info: SessionStartInfo): void {
+    this.clearProgressLine();
+    const files = info.fileCount === 1 ? "file" : "files";
+    const mutants = info.mutantCount === 1 ? "mutant" : "mutants";
+    this.stderr.write(
+      `Scoring ${String(info.mutantCount)} ${mutants} across ${String(info.fileCount)} ${files} (timeout ${String(info.timeoutMs)}ms)…\n`,
+    );
+  }
+
+  writeMutantResult(mutant: Mutant, progress: MutantProgress): void {
+    this.streamedMutants = true;
+    this.clearProgressLine();
+
+    if (DETAIL_STATUSES.has(mutant.status)) {
+      this.stdout.write(`${formatDetailBlock(mutant, this.cwd, progress)}\n`);
+      return;
+    }
+
+    // Compact live progress for Killed / NoCoverage so the run feels alive
+    // without flooding Survived-style diff blocks.
+    const line = formatCompactProgress(mutant, this.cwd, progress);
+    if (this.isStderrTty()) {
+      this.stderr.write(`\r${line}`);
+      this.progressDirty = true;
+    } else {
+      this.stderr.write(`${line}\n`);
+    }
+  }
+
+  async writeTerminal(result: SessionResult): Promise<void> {
+    this.clearProgressLine();
+
+    if (result.message != null && result.message.length > 0) {
+      const stream = result.exitCode === 2 ? this.stderr : this.stdout;
+      stream.write(`${result.message}\n`);
+    }
+
+    // Detail lines already streamed live; only dump them when writeTerminal
+    // is used alone (tests / idle refuse paths with statuses).
+    if (!this.streamedMutants) {
+      for (const mutant of result.statuses) {
+        if (!DETAIL_STATUSES.has(mutant.status)) {
+          continue;
+        }
+        this.stdout.write(`${formatDetailBlock(mutant, this.cwd)}\n`);
+      }
+    }
+
+    this.stdout.write(`${formatSummary(result.statuses)}\n`);
+    if (result.verboseFooter != null && result.verboseFooter.length > 0) {
+      this.stderr.write(`${result.verboseFooter}\n`);
+    }
+    this.streamedMutants = false;
+  }
+
+  private isStderrTty(): boolean {
+    const stream = this.stderr as NodeJS.WriteStream;
+    return typeof stream.isTTY === "boolean" && stream.isTTY;
+  }
+
+  private clearProgressLine(): void {
+    if (!this.progressDirty) {
+      return;
+    }
+    if (this.isStderrTty()) {
+      this.stderr.write("\r\x1b[2K");
+    }
+    this.progressDirty = false;
+  }
+}
+
+function formatDetailBlock(
+  mutant: Mutant,
+  cwd: string,
+  progress?: MutantProgress,
+): string {
+  const rel = relativePath(cwd, mutant.site.file);
+  const original = truncateTokenAware(
+    collapseWhitespace(mutant.site.original),
+    DETAIL_ORIGINAL_MAX,
+  );
+  const replacement = collapseWhitespace(mutant.site.replacement);
+  const status = statusLabel(mutant.status);
+  const head = progress != null
+    ? `[${String(progress.index)}/${String(progress.total)}] ${status}  ${mutant.site.mutatorName}  ${rel}:${String(mutant.site.line)}:${String(mutant.site.column)}`
+    : `${status}  ${mutant.site.mutatorName}  ${rel}:${String(mutant.site.line)}:${String(mutant.site.column)}`;
+  return `${head}\n- ${original}\n+ ${replacement}`;
+}
+
+function formatCompactProgress(
+  mutant: Mutant,
+  cwd: string,
+  progress: MutantProgress,
+): string {
+  const rel = relativePath(cwd, mutant.site.file);
+  const status = statusLabel(mutant.status);
+  const buckets = formatBucketShort(progress.counts);
+  const loc = `${rel}:${String(mutant.site.line)}:${String(mutant.site.column)}`;
+  return `[${String(progress.index)}/${String(progress.total)}] ${status}  ${mutant.site.mutatorName}  ${loc}  ${buckets}`;
+}
+
+function statusLabel(status: Mutant["status"]): string {
+  switch (status) {
+    case "Killed":
+      return "KILLED";
+    case "Survived":
+      return "SURVIVED";
+    case "Timeout":
+      return "TIMEOUT";
+    case "RuntimeError":
+      return "ERROR";
+    case "NoCoverage":
+      return "NO_COVERAGE";
+  }
+}
+
+function formatBucketShort(counts: BucketCounts): string {
+  return `K:${String(counts.killed)} S:${String(counts.survived)} T:${String(counts.timeout)} E:${String(counts.error)} NC:${String(counts.noCoverage)}`;
+}
+
+function relativePath(cwd: string, file: string): string {
+  return path.relative(cwd, file).replace(/\\/g, "/") || file;
+}
+
+function collapseWhitespace(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+function truncateTokenAware(text: string, maxChars: number): string {
+  if (text.length <= maxChars) {
+    return text;
+  }
+  const slice = text.slice(0, maxChars);
+  const lastSpace = slice.lastIndexOf(" ");
+  const cut = lastSpace >= Math.floor(maxChars / 2) ? slice.slice(0, lastSpace) : slice;
+  return `${cut}…`;
+}
+
+function formatSummary(statuses: readonly Mutant[]): string {
+  const counts = emptyCounts();
+  for (const mutant of statuses) {
+    bumpCount(counts, mutant.status);
+  }
+
+  return [
+    "",
+    "── Summary ──",
+    `Killed: ${counts.killed}`,
+    `Survived: ${counts.survived}`,
+    `Timeout: ${counts.timeout}`,
+    `Error: ${counts.error}`,
+    `No Coverage: ${counts.noCoverage}`,
+  ].join("\n");
+}
+
+function emptyCounts(): {
+  killed: number;
+  survived: number;
+  timeout: number;
+  error: number;
+  noCoverage: number;
+} {
+  return { killed: 0, survived: 0, timeout: 0, error: 0, noCoverage: 0 };
+}
+
+function bumpCount(
+  counts: {
+    killed: number;
+    survived: number;
+    timeout: number;
+    error: number;
+    noCoverage: number;
+  },
+  status: Mutant["status"],
+): void {
+  switch (status) {
+    case "Killed":
+      counts.killed += 1;
+      break;
+    case "Survived":
+      counts.survived += 1;
+      break;
+    case "Timeout":
+      counts.timeout += 1;
+      break;
+    case "RuntimeError":
+      counts.error += 1;
+      break;
+    case "NoCoverage":
+      counts.noCoverage += 1;
+      break;
+  }
+}

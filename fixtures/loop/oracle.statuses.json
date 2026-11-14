@@ -1,0 +1,45 @@
+{
+  "exitCode": 1,
+  "cwd": "fixtures/loop",
+  "mutateGlob": "src/**/*.ts",
+  "notes": "E2E spawns dist/cli.js with cwd=fixtures/loop so vitest resolves from fixtures/loop/node_modules (symlink to repo root). skipped.ts contributes zero sites (puca-disable-next-line).",
+  "statuses": [
+    {
+      "file": "src/calc.ts",
+      "mutatorName": "ArithmeticOperator",
+      "original": "+",
+      "replacement": "-",
+      "status": "Killed",
+      "killedBy": "calc > adds"
+    },
+    {
+      "file": "src/calc.ts",
+      "mutatorName": "ArithmeticOperator",
+      "original": "-",
+      "replacement": "+",
+      "status": "Killed",
+      "killedBy": "calc > subtracts"
+    },
+    {
+      "file": "src/hang.ts",
+      "mutatorName": "ConditionalExpression",
+      "original": "enabled",
+      "replacement": "true",
+      "status": "Timeout"
+    },
+    {
+      "file": "src/hang.ts",
+      "mutatorName": "ConditionalExpression",
+      "original": "enabled",
+      "replacement": "false",
+      "status": "Survived"
+    },
+    {
+      "file": "src/uncovered.ts",
+      "mutatorName": "ArithmeticOperator",
+      "original": "*",
+      "replacement": "/",
+      "status": "NoCoverage"
+    }
+  ]
+}

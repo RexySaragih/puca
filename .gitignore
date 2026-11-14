@@ -1,0 +1,41 @@
+# Rust
+target/
+**/*.rs.bk
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-store/
+
+# Build outputs (ADR-006: source-built NAPI — never commit .node artifacts)
+dist/
+*.node
+*.node.bak
+
+# TypeScript
+*.tsbuildinfo
+
+# Test / coverage
+coverage/
+.nyc_output/
+
+# IDE / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Env
+.env
+.env.*
+
+# napi-rs generated in crate dir
+crates/puca-binding/*.node
+crates/puca-binding/index.js
+crates/puca-binding/index.d.ts
+
+# Tools
+.planora

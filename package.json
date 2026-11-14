@@ -1,0 +1,63 @@
+{
+  "name": "puca",
+  "version": "0.1.0",
+  "description": "Vitest mutation testing — TypeScript orchestrator + Rust mutator (napi-rs)",
+  "type": "module",
+  "license": "MIT",
+  "bin": {
+    "puca": "./dist/cli.js"
+  },
+  "engines": {
+    "node": ">=20.6.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json && napi build --platform --release --package puca-binding",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint:deps": "tsc -p tsconfig.build.json && depcruise --config dependency-cruiser.cjs dist/domain dist/application",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "napi": {
+    "binaryName": "puca-binding",
+    "targets": [
+      "aarch64-apple-darwin",
+      "x86_64-apple-darwin",
+      "x86_64-unknown-linux-gnu",
+      "x86_64-pc-windows-msvc"
+    ]
+  },
+  "files": [
+    "dist",
+    "*.node",
+    "crates/puca-binding/*.node",
+    "schema"
+  ],
+  "exports": {
+    "./schema/mutation-report.json": "./schema/mutation-report.json",
+    "./schemaPath": {
+      "types": "./dist/schemaPath.d.ts",
+      "import": "./dist/schemaPath.js"
+    }
+  },
+  "peerDependencies": {
+    "vitest": ">=4.0.0"
+  },
+  "peerDependenciesMeta": {
+    "vitest": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@napi-rs/cli": "3.10.12",
+    "@types/micromatch": "4.0.10",
+    "@types/node": "^26.6.6",
+    "dependency-cruiser": "18.7.2",
+    "typescript": "7.0.2",
+    "vitest": "5.1.0"
+  },
+  "dependencies": {
+    "ajv": "8.20.0",
+    "micromatch": "4.0.8",
+    "mutation-testing-report-schema": "3.9.0"
+  }
+}
