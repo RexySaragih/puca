@@ -35,11 +35,9 @@ export interface PucaBinding {
   apply(source: string, site: SiteDto): string;
 }
 
-const require = createRequire(import.meta.url);
-
 /**
  * Resolve host platform ABI suffix used by `napi build --platform`
- * (e.g. darwin-arm64, linux-x64-gnu).
+ * (e.g. darwin-arm64, linux-x64-gnu). GNU-only linux suffixes this cycle (ADR-022).
  */
 export function hostPlatformAbi(): string {
   const { platform, arch } = process;
@@ -62,7 +60,7 @@ function packageRootFromThisModule(): string {
 }
 
 /**
- * Candidate paths for the built addon: package root, then crates/puca-binding
+ * Candidate filesystem paths for the built addon: package root, then crates/
  * (where `napi build --package puca-binding` writes by default).
  */
 export function bindingCandidatePaths(
@@ -76,20 +74,76 @@ export function bindingCandidatePaths(
   ];
 }
 
+/** UX-003 — missing or unloadable native addon (CLI maps throw → exit 2). */
+export function formatMissingBindingMessage(abi: string): string {
+  return (
+    `Native Púca addon is missing for '${abi}'. ` +
+    `Looked for puca-binding.${abi}.node (package root, crates/puca-binding) ` +
+    `and package 'puca-${abi}'. ` +
+    `Install optional dependencies (do not use --no-optional) or run npm run build (requires a Rust toolchain).`
+  );
+}
+
+function tryRequireBinding(modulePath: string): PucaBinding {
+  const requireFromPath = createRequire(modulePath);
+  return requireFromPath(modulePath) as PucaBinding;
+}
+
+function tryRequireOptionalPackage(root: string, abi: string): PucaBinding {
+  const packageJsonPath = path.join(root, "package.json");
+  if (!existsSync(packageJsonPath)) {
+    throw Object.assign(new Error("ENOENT package.json"), {
+      code: "ENOENT",
+    });
+  }
+  const requireFromRoot = createRequire(packageJsonPath);
+  return requireFromRoot(`puca-${abi}`) as PucaBinding;
+}
+
 /**
- * Load the native addon. Missing `.node` → clear Error (CLI later maps to exit 2).
+ * Load the native addon (ADR-022):
+ * 1) package-root `.node`
+ * 2) crates/puca-binding `.node`
+ * 3) `createRequire(root/package.json)("puca-"+abi)`
+ * Miss / dlopen → throw UX-003 (never exit the process from this adapter).
  */
 export function loadPucaBinding(
   root: string = packageRootFromThisModule(),
+  abi: string = hostPlatformAbi(),
 ): PucaBinding {
-  const candidates = bindingCandidatePaths(root);
-  const found = candidates.find((candidate) => existsSync(candidate));
-  if (found === undefined) {
-    throw new Error(
-      `Native Púca addon (.node) is missing after clone or install. Looked for: ${candidates.join(", ")}. Run npm run build (requires a Rust toolchain).`,
-    );
+  const candidates = bindingCandidatePaths(root, abi);
+  for (const candidate of candidates) {
+    if (!existsSync(candidate)) {
+      continue;
+    }
+    try {
+      return tryRequireBinding(candidate);
+    } catch (error) {
+      throw wrapBindingLoadError(abi, error);
+    }
   }
-  return require(found) as PucaBinding;
+
+  try {
+    return tryRequireOptionalPackage(root, abi);
+  } catch (error) {
+    if (isMissingOptionalPackage(error)) {
+      throw new Error(formatMissingBindingMessage(abi));
+    }
+    throw wrapBindingLoadError(abi, error);
+  }
+}
+
+function isMissingOptionalPackage(error: unknown): boolean {
+  if (error == null || typeof error !== "object") {
+    return false;
+  }
+  const code = (error as { code?: string }).code;
+  return code === "MODULE_NOT_FOUND" || code === "ENOENT";
+}
+
+function wrapBindingLoadError(abi: string, error: unknown): Error {
+  const detail = error instanceof Error ? error.message : String(error);
+  return new Error(`${formatMissingBindingMessage(abi)} ${detail}`);
 }
 
 export function siteIdFromDto(dto: SiteDto): string {

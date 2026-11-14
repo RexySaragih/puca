@@ -1,0 +1,144 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install JS deps
+        run: npm ci
+      - name: Build TypeScript + NAPI
+        run: npm run build
+      - name: Test
+        run: npm test
+
+  build:
+    name: pack (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install JS deps
+        run: npm ci
+      - name: Build then pack root + host abi
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm run build
+          case "$(uname -s)-$(uname -m)" in
+            Darwin-arm64) ABI=darwin-arm64 ;;
+            Darwin-x86_64) ABI=darwin-x64 ;;
+            Linux-x86_64) ABI=linux-x64-gnu ;;
+            *) echo "unsupported host $(uname -s)-$(uname -m)"; exit 1 ;;
+          esac
+          NODE_FILE="puca-binding.${ABI}.node"
+          if [[ -f "${NODE_FILE}" ]]; then
+            SRC="${NODE_FILE}"
+          elif [[ -f "crates/puca-binding/${NODE_FILE}" ]]; then
+            SRC="crates/puca-binding/${NODE_FILE}"
+          else
+            echo "missing ${NODE_FILE}"; exit 1
+          fi
+          cp "${SRC}" "npm/${ABI}/${NODE_FILE}"
+          mkdir -p artifacts
+          npm pack --pack-destination artifacts
+          npm pack "./npm/${ABI}" --pack-destination artifacts
+          ls -la artifacts
+      - name: Upload packed tarballs
+        uses: actions/upload-artifact@v4
+        with:
+          name: puca-tgz-${{ matrix.os }}
+          path: artifacts/*.tgz
+          if-no-files-found: error
+
+  smoke:
+    name: rust-free smoke (${{ matrix.os }})
+    needs: build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, ubuntu-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Assert rustc is absent
+        shell: bash
+        run: |
+          if command -v rustc >/dev/null 2>&1 || which rustc >/dev/null 2>&1; then
+            echo "rustc must not be on PATH in the smoke job" >&2
+            exit 1
+          fi
+          echo "rustc absent (ok)"
+      - name: Download packed tarballs
+        uses: actions/download-artifact@v4
+        with:
+          name: puca-tgz-${{ matrix.os }}
+          path: artifacts
+      - name: Install fixture Vitest only
+        working-directory: fixtures/loop
+        run: npm install --ignore-scripts --no-fund --no-audit
+      - name: Sibling-install root + host abi tarballs
+        shell: bash
+        run: |
+          set -euo pipefail
+          case "$(uname -s)-$(uname -m)" in
+            Darwin-arm64) ABI=darwin-arm64 ;;
+            Darwin-x86_64) ABI=darwin-x64 ;;
+            Linux-x86_64) ABI=linux-x64-gnu ;;
+            *) echo "unsupported host"; exit 1 ;;
+          esac
+          ROOT_TGZ="artifacts/puca-0.2.0.tgz"
+          ABI_TGZ="artifacts/puca-${ABI}-0.2.0.tgz"
+          test -f "${ROOT_TGZ}"
+          test -f "${ABI_TGZ}"
+          mkdir -p smoke-workspace
+          cp "${ROOT_TGZ}" "${ABI_TGZ}" smoke-workspace/
+          cd smoke-workspace
+          npm install "./puca-0.2.0.tgz" "./puca-${ABI}-0.2.0.tgz" --no-fund --no-audit
+      - name: Run puca against fixtures/loop oracle
+        shell: bash
+        run: |
+          set -euo pipefail
+          JSON_OUT="$(mktemp)"
+          PUCA_BIN="${GITHUB_WORKSPACE}/smoke-workspace/node_modules/.bin/puca"
+          set +e
+          (cd fixtures/loop && "${PUCA_BIN}" --mutate "src/**/*.ts" --timeout 4000 --json "${JSON_OUT}")
+          CODE=$?
+          set -e
+          node scripts/compare-loop-oracle.mjs "${JSON_OUT}" "${CODE}" fixtures/loop/oracle.statuses.json
+      - name: Workspace must stay sandbox-free
+        shell: bash
+        run: |
+          set -euo pipefail
+          if find . -type d \( -name '.puca-tmp' -o -name '.stryker-tmp' -o -name '.puca' \) | grep -q .; then
+            echo "forbidden sandbox dirs present" >&2
+            find . -type d \( -name '.puca-tmp' -o -name '.stryker-tmp' -o -name '.puca' \) >&2
+            exit 1
+          fi

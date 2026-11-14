@@ -184,7 +184,7 @@ Missing `.node` after clone → exit 2 until `npm run build`.
 | ADR-003 | Resolve Vitest from cwd |
 | ADR-004 | Prepend RAM plugin via `viteOverrides` |
 | ADR-005 | Reverse map from baseline graph; setup/global attach |
-| ADR-006 | Source-first NAPI (no platform packages this cycle) |
+| ADR-006 / ADR-020 | Source-build for contributors; GHA packed `puca-<abi>` tarballs via GitHub Releases; **no** npm registry publish |
 | ADR-007 | `--json` = mutation-testing-report-schema |
 | ADR-008 | Git via `spawn` `shell:false` |
 | ADR-009 | Forced session overlay for determinism |

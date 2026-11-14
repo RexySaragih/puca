@@ -1,9 +1,12 @@
 import { createRequire } from "node:module";
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   bindingCandidatePaths,
+  formatMissingBindingMessage,
   hostPlatformAbi,
   loadPucaBinding,
   NapiMutatorEngine,
@@ -11,14 +14,29 @@ import {
 } from "../src/adapters/outbound/napi/NapiMutatorEngine.js";
 import { toAbsolutePath } from "../src/domain/mutant.js";
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(here, "..");
 const require = createRequire(import.meta.url);
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+
+const tempDirs: string[] = [];
+
+afterEach(async () => {
+  while (tempDirs.length > 0) {
+    const dir = tempDirs.pop();
+    if (dir != null) {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+async function makeTempDir(prefix: string): Promise<string> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  tempDirs.push(dir);
+  return dir;
+}
 
 describe("NapiMutatorEngine", () => {
   describe("when the host addon is built", () => {
-    it("should load the .node on the host platform", () => {
-      // Given / When
+    it("should load the .node on the host platform (AC2)", () => {
       const abi = hostPlatformAbi();
       const candidates = bindingCandidatePaths(repoRoot, abi);
       const found = candidates.find((candidate) => {
@@ -30,25 +48,114 @@ describe("NapiMutatorEngine", () => {
         }
       });
 
-      // Then — AC2
       expect(found, `expected addon among ${candidates.join(", ")}`).toBeDefined();
       const binding = loadPucaBinding(repoRoot);
       expect(typeof binding.discover).toBe("function");
       expect(typeof binding.apply).toBe("function");
-      const loaded = require(found!) as Record<string, unknown>;
-      expect(loaded.discover).toBeTypeOf("function");
-      expect(loaded.apply).toBeTypeOf("function");
+    });
+  });
+
+  describe("when only the crates path .node exists (AC3)", () => {
+    it("should load the crates file when package-root .node is absent", async () => {
+      const abi = hostPlatformAbi();
+      const cratesSource = path.join(
+        repoRoot,
+        "crates",
+        "puca-binding",
+        `puca-binding.${abi}.node`,
+      );
+      await fs.access(cratesSource);
+
+      const tmp = await makeTempDir("puca-crates-only-");
+      await fs.writeFile(
+        path.join(tmp, "package.json"),
+        JSON.stringify({ name: "puca-crates-only", type: "module" }),
+        "utf8",
+      );
+      await fs.mkdir(path.join(tmp, "crates", "puca-binding"), {
+        recursive: true,
+      });
+      await fs.copyFile(
+        cratesSource,
+        path.join(tmp, "crates", "puca-binding", `puca-binding.${abi}.node`),
+      );
+
+      const binding = loadPucaBinding(tmp);
+      expect(typeof binding.discover).toBe("function");
+      expect(typeof binding.apply).toBe("function");
+    });
+  });
+
+  describe("when puca-<abi> is installed under the same root (AC4)", () => {
+    it("should load via createRequire(root/package.json)", async () => {
+      const abi = hostPlatformAbi();
+      const tmp = await makeTempDir("puca-optional-stub-");
+      await fs.writeFile(
+        path.join(tmp, "package.json"),
+        JSON.stringify({ name: "puca-optional-host", type: "module" }),
+        "utf8",
+      );
+      const stubDir = path.join(tmp, "node_modules", `puca-${abi}`);
+      await fs.mkdir(stubDir, { recursive: true });
+      await fs.writeFile(
+        path.join(stubDir, "package.json"),
+        JSON.stringify({
+          name: `puca-${abi}`,
+          version: "0.0.0-test",
+          main: "index.js",
+        }),
+        "utf8",
+      );
+      const stubMarker = `stub-from-${path.basename(tmp)}`;
+      await fs.writeFile(
+        path.join(stubDir, "index.js"),
+        `module.exports = { discover() { return ${JSON.stringify(stubMarker)}; }, apply() { return ${JSON.stringify(stubMarker)}; } };\n`,
+        "utf8",
+      );
+
+      const binding = loadPucaBinding(tmp);
+      expect(binding.discover("x.ts", "a + b")).toBe(stubMarker);
+      expect(binding.apply("a + b", {} as never)).toBe(stubMarker);
+    });
+  });
+
+  describe("when no .node and no puca-<abi> (AC1)", () => {
+    it("should throw UX-003 including abi, package name, and npm run build", async () => {
+      const abi = hostPlatformAbi();
+      const tmp = await makeTempDir("puca-missing-napi-");
+      await fs.writeFile(
+        path.join(tmp, "package.json"),
+        JSON.stringify({ name: "puca-missing", type: "module" }),
+        "utf8",
+      );
+
+      const exitSpy = vi.spyOn(process, "exit").mockImplementation((() => {
+        throw new Error("process.exit must not be called");
+      }) as never);
+
+      expect(() => loadPucaBinding(tmp)).toThrow(formatMissingBindingMessage(abi));
+      expect(() => loadPucaBinding(tmp)).toThrow(new RegExp(`puca-${abi}`));
+      expect(() => loadPucaBinding(tmp)).toThrow(/npm run build/);
+      expect(exitSpy).not.toHaveBeenCalled();
+      exitSpy.mockRestore();
+    });
+  });
+
+  describe("when root has no package.json (AC7)", () => {
+    it("should throw UX-003 without falling back to import.meta.url", async () => {
+      const abi = hostPlatformAbi();
+      const tmp = await makeTempDir("puca-no-pkgjson-");
+
+      expect(() => loadPucaBinding(tmp)).toThrow(formatMissingBindingMessage(abi));
     });
   });
 
   describe("when source contains a + b", () => {
     it("should discover then apply an arithmetic replacement without writing a path", async () => {
-      // Given
       const engine = new NapiMutatorEngine(loadPucaBinding(repoRoot));
       const source = "export const v = a + b;\n";
       const file = toAbsolutePath(path.join(repoRoot, "snippet.ts"));
 
-      // When
       const found = await engine.discover(file, source);
       const sites = found.sites;
       const plusToMinus = sites.find(
@@ -60,7 +167,6 @@ describe("NapiMutatorEngine", () => {
       expect(plusToMinus).toBeDefined();
       const mutated = await engine.apply(source, plusToMinus!);
 
-      // Then — AC1
       expect(mutated).toContain("a - b");
       expect(mutated).not.toContain("a + b");
       expect(source).toContain("a + b");
@@ -68,7 +174,6 @@ describe("NapiMutatorEngine", () => {
         `${file}:${plusToMinus!.startOffset}:ArithmeticOperator:-`,
       );
 
-      const fs = await import("node:fs/promises");
       await expect(fs.access(file)).rejects.toMatchObject({ code: "ENOENT" });
     });
   });
@@ -126,14 +231,16 @@ describe("NapiMutatorEngine", () => {
     });
   });
 
-  describe("when the native addon is missing", () => {
-    it("should throw a clone/build error instead of a raw MODULE_NOT_FOUND", () => {
-      expect(() => loadPucaBinding(path.join(repoRoot, "tmp-missing-napi"))).toThrow(
-        /Native Púca addon \(\.node\) is missing after clone or install/,
+  describe("when NapiMutatorEngine.ts is scanned (AC6)", () => {
+    it("should omit worker_threads and process.exit and musl branches", async () => {
+      const source = await fs.readFile(
+        path.join(repoRoot, "src/adapters/outbound/napi/NapiMutatorEngine.ts"),
+        "utf8",
       );
-      expect(() => loadPucaBinding(path.join(repoRoot, "tmp-missing-napi"))).toThrow(
-        /npm run build/,
-      );
+      expect(source).not.toMatch(/\bworker_threads\b/);
+      expect(source).not.toMatch(/process\.exit/);
+      expect(source).not.toMatch(/\bmusl\b/);
+      expect(hostPlatformAbi()).not.toMatch(/musl/);
     });
   });
 });

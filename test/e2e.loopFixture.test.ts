@@ -164,44 +164,55 @@ describe("Loop fixture E2E and no-sandbox proof", () => {
     }, SPAWN_WALL_MS * 2);
   });
 
-  describe("when the NAPI addon is missing (AC4)", () => {
-    it("should exit 2", async () => {
-      // Given — temp package root without any puca-binding*.node
+  describe("when the NAPI addon is missing (AC4 / SC-310)", () => {
+    it("should exit 2 with UX-003 without sharing the repo node_modules", async () => {
+      // Given — isolated package root (R16: do not symlink repo node_modules)
       const emptyRoot = await fs.mkdtemp(path.join(os.tmpdir(), "puca-no-napi-"));
+      const rootPkg = JSON.parse(
+        await fs.readFile(path.join(repoRoot, "package.json"), "utf8"),
+      ) as {
+        dependencies?: Record<string, string>;
+      };
       await fs.writeFile(
         path.join(emptyRoot, "package.json"),
-        JSON.stringify({ name: "puca-no-napi", type: "module" }),
+        JSON.stringify(
+          {
+            name: "puca-no-napi",
+            type: "module",
+            dependencies: rootPkg.dependencies ?? {},
+          },
+          null,
+          2,
+        ),
         "utf8",
       );
       await fs.cp(path.join(repoRoot, "dist"), path.join(emptyRoot, "dist"), {
         recursive: true,
       });
-      // Point fixture-like cwd with vitest available via symlink
-      await fs.symlink(
-        path.join(repoRoot, "node_modules"),
-        path.join(emptyRoot, "node_modules"),
-        "dir",
-      );
-      await fs.cp(fixtureCwd, path.join(emptyRoot, "fixtures-loop"), {
+      await fs.cp(path.join(repoRoot, "schema"), path.join(emptyRoot, "schema"), {
+        recursive: true,
+      });
+      await spawnNpmInstall(emptyRoot);
+
+      const fixtureCopy = path.join(emptyRoot, "fixtures-loop");
+      await fs.cp(fixtureCwd, fixtureCopy, {
         recursive: true,
         filter: (src) => !src.includes(`${path.sep}node_modules`),
       });
-      await fs.symlink(
-        path.join(repoRoot, "node_modules"),
-        path.join(emptyRoot, "fixtures-loop", "node_modules"),
-        "dir",
-      );
+      await spawnNpmInstall(fixtureCopy);
 
-      // When — CLI loads NapiMutatorEngine from emptyRoot/dist (no .node beside it)
+      // When — CLI loads from emptyRoot/dist (no .node, no puca-<abi>)
       const run = await spawnNode(
         emptyRoot,
         [path.join(emptyRoot, "dist", "cli.js"), "--mutate", "src/**/*.ts"],
-        { cwd: path.join(emptyRoot, "fixtures-loop") },
+        { cwd: fixtureCopy },
       );
 
       // Then
       expect(run.exitCode).toBe(2);
-      expect(run.stderr + run.stdout).toMatch(/puca-binding|native addon|not found/i);
+      expect(run.stderr + run.stdout).toMatch(/Native Púca addon is missing for/);
+      expect(run.stderr + run.stdout).toMatch(/puca-/);
+      expect(run.stderr + run.stdout).toMatch(/npm run build/);
 
       await fs.rm(emptyRoot, { recursive: true, force: true });
     }, SPAWN_WALL_MS);
@@ -317,6 +328,33 @@ describe("Loop fixture E2E and no-sandbox proof", () => {
     }, PARALLEL_SPAWN_WALL_MS * 2);
   });
 });
+
+async function spawnNpmInstall(cwd: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(
+      "npm",
+      ["install", "--ignore-scripts", "--no-fund", "--no-audit"],
+      {
+        cwd,
+        env: { ...process.env, FORCE_COLOR: "0" },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    let stderr = "";
+    child.stderr?.setEncoding("utf8");
+    child.stderr?.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(new Error(`npm install failed in ${cwd}: ${stderr}`));
+    });
+  });
+}
 
 async function spawnPuca(
   cwd: string,

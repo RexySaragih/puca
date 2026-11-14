@@ -1,0 +1,22 @@
+{
+  "name": "puca-linux-x64-gnu",
+  "version": "0.2.0",
+  "description": "Púca native binding for linux-x64-gnu",
+  "license": "MIT",
+  "main": "puca-binding.linux-x64-gnu.node",
+  "files": [
+    "puca-binding.linux-x64-gnu.node"
+  ],
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "libc": [
+    "glibc"
+  ],
+  "engines": {
+    "node": ">=20.6.0"
+  }
+}

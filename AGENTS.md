@@ -124,7 +124,8 @@ flowchart TD
 - Bundling Vitest into the `puca` package (resolve from project `cwd`)
 - Mutating test/spec files, configs, `.d.ts`, or `node_modules` / `dist`
 - Honoring Stryker disable comments (Púca-only disable lines)
-- Expanding Phase 1 into Jest, Browser Mode, CJS, SFC, prebuild matrices, or `puca.config.ts` without an explicit product decision
+- Expanding into Jest, Browser Mode, CJS, SFC, or `puca.config.ts` without an explicit product decision
+- Publishing to the npm registry or adding git `optionalDependencies` on unpublished `puca-<abi>` names (Phase 3.1 ships GitHub Release tarballs only)
 - Adding UI layers — terminal contract is enough (UX-001)
 
 ---

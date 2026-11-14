@@ -4,7 +4,7 @@ Local mutation-testing loop for **TypeScript ESM + Vitest**.
 
 Púca mutates the files you just changed (or an explicit glob), injects each mutant **in RAM** through a Vite plugin, runs only the related Vitest specs on a keep-alive session, and reports what survived — without Stryker-style sandbox copies, Jest, or V8 coverage maps.
 
-Phase 1 is a **source-built** CLI (`puca`). It is not published to npm this cycle.
+`puca` is **not published to the npm registry** this cycle. Contributors source-build with Rust; Phase 3.1 also ships **GitHub Release** tarball pairs (`puca` root + `puca-<abi>`) for rust-free hosts.
 
 ```mermaid
 flowchart LR
@@ -50,14 +50,28 @@ Mutation testing is deliberate shapeshifting: the tool quietly changes the shape
 
 ## Install (from source)
 
+Contributors need **rustc** (see `rust-toolchain.toml`):
+
 ```bash
-git clone <this-repo>
-cd Púca   # or your checkout path
+git clone https://github.com/RexySaragih/puca.git
+cd puca
 npm install
 npm run build   # tsc → dist/ + napi-rs .node addon
 ```
 
 The binary entry is `dist/cli.js` (`package.json` `bin.puca`).
+
+### Install from GitHub Release tarballs (Phase 3.1, rust-free)
+
+Download the matching pair from the [GitHub Releases](https://github.com/RexySaragih/puca/releases) page — root `puca-0.2.0.tgz` plus host `puca-<abi>-0.2.0.tgz` (for example `puca-darwin-arm64-0.2.0.tgz`). Install **both** into a workspace (not `npm install -g puca` from the registry):
+
+```bash
+mkdir puca-install && cd puca-install
+npm install ./puca-0.2.0.tgz ./puca-darwin-arm64-0.2.0.tgz
+./node_modules/.bin/puca --mutate 'src/**/*.ts'
+```
+
+Do not use `--no-optional` once platform packages are wired as optionals in a later cycle; this cycle installs the abi tarball explicitly beside the root.
 
 ---
 
@@ -201,9 +215,11 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for ports, composition root, and the mu
 
 ---
 
-## Phase 1 out of scope
+## Out of scope this cycle
 
-Jest · `node:test` register hooks · Browser Mode · CJS · SFC frameworks · multi-project Vitest · platform prebuilds · `puca.config.ts` · HTML UI · `@puca` npm scope · Windows as a hard gate.
+Jest · `node:test` register hooks · Browser Mode · CJS · SFC frameworks · multi-project Vitest · npm registry publish · git `optionalDependencies` on unpublished names · `puca.config.ts` · HTML UI · `@puca` npm scope · Windows as a hard gate.
+
+Phase 3.1 **does** ship GHA-packed GitHub Release tarballs (root + abi); that is not npm `optionalDependencies` prebuilds.
 
 ---
 

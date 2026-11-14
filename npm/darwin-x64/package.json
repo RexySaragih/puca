@@ -1,0 +1,19 @@
+{
+  "name": "puca-darwin-x64",
+  "version": "0.2.0",
+  "description": "Púca native binding for darwin-x64",
+  "license": "MIT",
+  "main": "puca-binding.darwin-x64.node",
+  "files": [
+    "puca-binding.darwin-x64.node"
+  ],
+  "os": [
+    "darwin"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "engines": {
+    "node": ">=20.6.0"
+  }
+}

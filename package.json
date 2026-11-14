@@ -1,9 +1,13 @@
 {
   "name": "puca",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Vitest mutation testing — TypeScript orchestrator + Rust mutator (napi-rs)",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/RexySaragih/puca.git"
+  },
   "bin": {
     "puca": "./dist/cli.js"
   },
@@ -19,6 +23,7 @@
   },
   "napi": {
     "binaryName": "puca-binding",
+    "packageName": "puca",
     "targets": [
       "aarch64-apple-darwin",
       "x86_64-apple-darwin",
@@ -28,8 +33,6 @@
   },
   "files": [
     "dist",
-    "*.node",
-    "crates/puca-binding/*.node",
     "schema"
   ],
   "exports": {

@@ -97,15 +97,20 @@ flowchart LR
 
 ---
 
-## Explicit non-goals (Phase 1)
+## Explicit non-goals
 
 - Jest, `node:test` / `register()` adapters
 - V8 coverage maps, warm worker pools, disk mutant cache
 - CFG / type-aware pruning, Stryker bake-off claims
 - HTML reporter, Browser Mode, CJS, Vue/Svelte/Angular SFC
 - Multi-project Vitest monorepos, mutating `.js`/`.mjs`
-- Platform `optionalDependencies` prebuilds, `puca.config.ts`
+- `puca.config.ts`
 - `@puca/*` npm scope, Windows as a release gate
+- **npm registry publish** of `puca` or `puca-<abi>`, and git `optionalDependencies` on unpublished platform names
+
+### Phase 3.1 distribution (not a non-goal)
+
+GHA packs **GitHub Release** tarballs (`puca-0.2.0.tgz` + matching `puca-<abi>-0.2.0.tgz`) so a rust-free host can install the CLI without `rustc`. Contributors still source-build with `npm run build`. Nothing is published to the npm registry this cycle.
 
 ---
 

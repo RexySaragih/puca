@@ -1,0 +1,205 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-matrix:
+    name: build ${{ matrix.abi }}
+    runs-on: ${{ matrix.runner }}
+    continue-on-error: ${{ matrix.abi == 'win32-x64-msvc' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - abi: darwin-arm64
+            runner: macos-14
+            triple: aarch64-apple-darwin
+          - abi: darwin-x64
+            runner: macos-14
+            triple: x86_64-apple-darwin
+          - abi: linux-x64-gnu
+            runner: ubuntu-latest
+            triple: x86_64-unknown-linux-gnu
+          - abi: win32-x64-msvc
+            runner: windows-latest
+            triple: x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.triple }}
+      - name: Install JS deps
+        run: npm ci
+      - name: Build TypeScript once
+        run: npx tsc -p tsconfig.build.json
+      - name: Build NAPI for target
+        shell: bash
+        run: |
+          set -euo pipefail
+          npx napi build --platform --release --package puca-binding --target "${{ matrix.triple }}"
+          NODE_FILE="puca-binding.${{ matrix.abi }}.node"
+          if [[ -f "${NODE_FILE}" ]]; then
+            SRC="${NODE_FILE}"
+          elif [[ -f "crates/puca-binding/${NODE_FILE}" ]]; then
+            SRC="crates/puca-binding/${NODE_FILE}"
+          else
+            echo "missing ${NODE_FILE}"; find . -name '*.node' | head; exit 1
+          fi
+          cp "${SRC}" "npm/${{ matrix.abi }}/${NODE_FILE}"
+          mkdir -p artifacts
+          npm pack --pack-destination artifacts
+          npm pack "./npm/${{ matrix.abi }}" --pack-destination artifacts
+          ls -la artifacts
+      - name: Assert darwin-x64 is x86_64 Mach-O
+        if: matrix.abi == 'darwin-x64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          NODE_FILE="npm/darwin-x64/puca-binding.darwin-x64.node"
+          file "${NODE_FILE}" | tee /tmp/mach-o.txt
+          grep -E 'x86_64|Intel' /tmp/mach-o.txt
+          otool -hv "${NODE_FILE}" | tee /tmp/otool.txt
+          grep -E 'X86_64|x86_64' /tmp/otool.txt
+      - name: Upload platform artifacts
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.abi }}
+          path: artifacts/*.tgz
+          if-no-files-found: error
+
+  smoke-darwin-arm64:
+    name: rust-free smoke darwin-arm64
+    needs: build-matrix
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Assert rustc is absent
+        shell: bash
+        run: |
+          if command -v rustc >/dev/null 2>&1 || which rustc >/dev/null 2>&1; then
+            echo "rustc must not be on PATH in the smoke job" >&2
+            exit 1
+          fi
+      - name: Download darwin-arm64 artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-darwin-arm64
+          path: artifacts
+      - name: Install fixture Vitest only
+        working-directory: fixtures/loop
+        run: npm install --ignore-scripts --no-fund --no-audit
+      - name: Sibling-install and oracle smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p smoke-workspace
+          cp artifacts/puca-0.2.0.tgz artifacts/puca-darwin-arm64-0.2.0.tgz smoke-workspace/
+          cd smoke-workspace
+          npm install ./puca-0.2.0.tgz ./puca-darwin-arm64-0.2.0.tgz --no-fund --no-audit
+          cd "${GITHUB_WORKSPACE}"
+          JSON_OUT="$(mktemp)"
+          PUCA_BIN="${GITHUB_WORKSPACE}/smoke-workspace/node_modules/.bin/puca"
+          set +e
+          (cd fixtures/loop && "${PUCA_BIN}" --mutate "src/**/*.ts" --timeout 4000 --json "${JSON_OUT}")
+          CODE=$?
+          set -e
+          node scripts/compare-loop-oracle.mjs "${JSON_OUT}" "${CODE}" fixtures/loop/oracle.statuses.json
+
+  smoke-linux-x64-gnu:
+    name: rust-free smoke linux-x64-gnu
+    needs: build-matrix
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Assert rustc is absent
+        shell: bash
+        run: |
+          if command -v rustc >/dev/null 2>&1 || which rustc >/dev/null 2>&1; then
+            echo "rustc must not be on PATH in the smoke job" >&2
+            exit 1
+          fi
+      - name: Download linux-x64-gnu artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: release-linux-x64-gnu
+          path: artifacts
+      - name: Install fixture Vitest only
+        working-directory: fixtures/loop
+        run: npm install --ignore-scripts --no-fund --no-audit
+      - name: Sibling-install and oracle smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p smoke-workspace
+          cp artifacts/puca-0.2.0.tgz artifacts/puca-linux-x64-gnu-0.2.0.tgz smoke-workspace/
+          cd smoke-workspace
+          npm install ./puca-0.2.0.tgz ./puca-linux-x64-gnu-0.2.0.tgz --no-fund --no-audit
+          cd "${GITHUB_WORKSPACE}"
+          JSON_OUT="$(mktemp)"
+          PUCA_BIN="${GITHUB_WORKSPACE}/smoke-workspace/node_modules/.bin/puca"
+          set +e
+          (cd fixtures/loop && "${PUCA_BIN}" --mutate "src/**/*.ts" --timeout 4000 --json "${JSON_OUT}")
+          CODE=$?
+          set -e
+          node scripts/compare-loop-oracle.mjs "${JSON_OUT}" "${CODE}" fixtures/loop/oracle.statuses.json
+
+  github-release:
+    name: GitHub Release tarballs
+    needs: [build-matrix, smoke-darwin-arm64, smoke-linux-x64-gnu]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download all release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: release-artifacts
+          merge-multiple: true
+      - name: Collect gate tarballs (omit missing win32)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-upload
+          for name in \
+            puca-0.2.0.tgz \
+            puca-darwin-arm64-0.2.0.tgz \
+            puca-darwin-x64-0.2.0.tgz \
+            puca-linux-x64-gnu-0.2.0.tgz
+          do
+            FOUND="$(find release-artifacts -name "${name}" | head -n 1 || true)"
+            if [[ -z "${FOUND}" ]]; then
+              echo "missing required ${name}" >&2
+              exit 1
+            fi
+            cp "${FOUND}" "release-upload/${name}"
+          done
+          WIN="$(find release-artifacts -name 'puca-win32-x64-msvc-0.2.0.tgz' | head -n 1 || true)"
+          if [[ -n "${WIN}" ]]; then
+            cp "${WIN}" release-upload/
+          else
+            echo "win32 tarball omitted (job failed or skipped)"
+          fi
+          ls -la release-upload
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-upload/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true
