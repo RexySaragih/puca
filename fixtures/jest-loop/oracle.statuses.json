@@ -1,0 +1,197 @@
+{
+  "exitCode": 1,
+  "cwd": "fixtures/jest-loop",
+  "mutateGlob": "src/**/*.js",
+  "runner": "jest",
+  "notes": "R5-Jest oracle. skippedAdd + is puca-disable-next-line (no site). inventory covered via catalog barrel one-hop scan. soft.* Survived by design (typeof-only tests).",
+  "statuses": [
+    {
+      "file": "src/calc.js",
+      "mutatorName": "ArithmeticOperator",
+      "replacement": "-",
+      "status": "Killed",
+      "killedBy": [
+        "calc adds"
+      ],
+      "location": {
+        "start": {
+          "line": 2,
+          "column": 12
+        },
+        "end": {
+          "line": 2,
+          "column": 13
+        }
+      }
+    },
+    {
+      "file": "src/calc.js",
+      "mutatorName": "ArithmeticOperator",
+      "replacement": "+",
+      "status": "Killed",
+      "killedBy": [
+        "calc subtracts"
+      ],
+      "location": {
+        "start": {
+          "line": 6,
+          "column": 12
+        },
+        "end": {
+          "line": 6,
+          "column": 13
+        }
+      }
+    },
+    {
+      "file": "src/hang.js",
+      "mutatorName": "ConditionalExpression",
+      "replacement": "false",
+      "status": "Survived",
+      "location": {
+        "start": {
+          "line": 2,
+          "column": 10
+        },
+        "end": {
+          "line": 2,
+          "column": 17
+        }
+      }
+    },
+    {
+      "file": "src/hang.js",
+      "mutatorName": "ConditionalExpression",
+      "replacement": "true",
+      "status": "Timeout",
+      "location": {
+        "start": {
+          "line": 2,
+          "column": 10
+        },
+        "end": {
+          "line": 2,
+          "column": 17
+        }
+      }
+    },
+    {
+      "file": "src/inventory.js",
+      "mutatorName": "ArithmeticOperator",
+      "replacement": "+",
+      "status": "Killed",
+      "killedBy": [
+        "catalog barrel computes stock via re-export"
+      ],
+      "location": {
+        "start": {
+          "line": 2,
+          "column": 17
+        },
+        "end": {
+          "line": 2,
+          "column": 18
+        }
+      }
+    },
+    {
+      "file": "src/skipped.js",
+      "mutatorName": "ArithmeticOperator",
+      "replacement": "/",
+      "status": "Killed",
+      "killedBy": [
+        "skipped multiplies kept site"
+      ],
+      "location": {
+        "start": {
+          "line": 7,
+          "column": 12
+        },
+        "end": {
+          "line": 7,
+          "column": 13
+        }
+      }
+    },
+    {
+      "file": "src/soft.js",
+      "mutatorName": "BooleanLiteral",
+      "replacement": "false",
+      "status": "Survived",
+      "location": {
+        "start": {
+          "line": 3,
+          "column": 19
+        },
+        "end": {
+          "line": 3,
+          "column": 23
+        }
+      }
+    },
+    {
+      "file": "src/soft.js",
+      "mutatorName": "ConditionalExpression",
+      "replacement": "false",
+      "status": "Survived",
+      "location": {
+        "start": {
+          "line": 7,
+          "column": 10
+        },
+        "end": {
+          "line": 7,
+          "column": 12
+        }
+      }
+    },
+    {
+      "file": "src/soft.js",
+      "mutatorName": "ConditionalExpression",
+      "replacement": "true",
+      "status": "Survived",
+      "location": {
+        "start": {
+          "line": 7,
+          "column": 10
+        },
+        "end": {
+          "line": 7,
+          "column": 12
+        }
+      }
+    },
+    {
+      "file": "src/soft.js",
+      "mutatorName": "EqualityOperator",
+      "replacement": "!==",
+      "status": "Survived",
+      "location": {
+        "start": {
+          "line": 3,
+          "column": 15
+        },
+        "end": {
+          "line": 3,
+          "column": 18
+        }
+      }
+    },
+    {
+      "file": "src/uncovered.js",
+      "mutatorName": "ArithmeticOperator",
+      "replacement": "/",
+      "status": "NoCoverage",
+      "location": {
+        "start": {
+          "line": 2,
+          "column": 12
+        },
+        "end": {
+          "line": 2,
+          "column": 13
+        }
+      }
+    }
+  ]
+}

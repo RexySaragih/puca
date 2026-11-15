@@ -21,6 +21,8 @@ interface SchemaReport {
       readonly mutants: readonly {
         readonly id: string;
         readonly status: string;
+        readonly mutatorName?: string;
+        readonly replacement?: string;
       }[];
     }
   >;
@@ -40,7 +42,7 @@ describe("Jest loop fixture E2E (SC-343)", () => {
   });
 
   describe("when --runner jest scores fixtures/jest-loop (AC2)", () => {
-    it("should produce mutant statuses with no sandbox dirs", async () => {
+    it("should match oracle statuses, exit 1, and leave no sandbox dirs", async () => {
       const jsonOut = path.join(
         os.tmpdir(),
         `puca-jest-loop-${String(process.pid)}.json`,
@@ -56,19 +58,69 @@ describe("Jest loop fixture E2E (SC-343)", () => {
         jsonOut,
       ]);
 
-      expect(run.exitCode, run.stderr || run.stdout).not.toBe(2);
+      const oracle = JSON.parse(
+        await fs.readFile(
+          path.join(fixtureCwd, "oracle.statuses.json"),
+          "utf8",
+        ),
+      ) as {
+        exitCode: number;
+        statuses: Array<{
+          file: string;
+          mutatorName: string;
+          replacement: string;
+          status: string;
+        }>;
+      };
+
+      expect(run.exitCode, run.stderr || run.stdout).toBe(oracle.exitCode);
       expect(run.report, run.stderr || run.stdout).not.toBeNull();
-      const statuses = statusesFromReport(run.report);
-      expect(statuses.length).toBeGreaterThan(0);
-      expect(statuses.some((s) => s === "Killed" || s === "Survived")).toBe(
-        true,
-      );
+
+      const actual = statusKeysFromReport(run.report);
+      const expected = oracle.statuses
+        .map(
+          (s) =>
+            `${s.file}|${s.mutatorName}|${s.replacement}|${s.status}`,
+        )
+        .sort((a, b) => a.localeCompare(b));
+      expect(actual).toEqual(expected);
+
+      expect(actual.some((k) => k.includes("|Timeout"))).toBe(true);
+      expect(actual.some((k) => k.includes("|NoCoverage"))).toBe(true);
+      expect(actual.some((k) => k.includes("|Killed"))).toBe(true);
 
       const hits = await walkForbiddenSandboxDirs(fixtureCwd);
       expect(hits).toEqual([]);
 
       await fs.rm(jsonOut, { force: true });
     }, SPAWN_WALL_MS);
+
+    it("should produce identical statuses on two cold runs", async () => {
+      const aPath = path.join(
+        os.tmpdir(),
+        `puca-jest-cold-a-${String(process.pid)}.json`,
+      );
+      const bPath = path.join(
+        os.tmpdir(),
+        `puca-jest-cold-b-${String(process.pid)}.json`,
+      );
+      const args = [
+        "--runner",
+        "jest",
+        "--mutate",
+        MUTATE_GLOB,
+        "--timeout",
+        String(OUTER_TIMEOUT_MS),
+      ] as const;
+      const a = await spawnPuca(fixtureCwd, [...args, "--json", aPath]);
+      const b = await spawnPuca(fixtureCwd, [...args, "--json", bPath]);
+      expect(statusKeysFromReport(a.report)).toEqual(
+        statusKeysFromReport(b.report),
+      );
+      expect(a.exitCode).toBe(b.exitCode);
+      await fs.rm(aPath, { force: true });
+      await fs.rm(bPath, { force: true });
+    }, SPAWN_WALL_MS * 2);
   });
 
   describe("when --runner jest --workers 4 (AC3 / REQ-2003)", () => {
@@ -158,6 +210,21 @@ function statusesFromReport(report: SchemaReport | null): string[] {
     }
   }
   return out;
+}
+
+function statusKeysFromReport(report: SchemaReport | null): string[] {
+  if (report == null) {
+    return [];
+  }
+  const out: string[] = [];
+  for (const [file, entry] of Object.entries(report.files)) {
+    for (const mutant of entry.mutants) {
+      out.push(
+        `${file}|${mutant.mutatorName ?? "?"}|${mutant.replacement ?? "?"}|${mutant.status}`,
+      );
+    }
+  }
+  return out.sort((a, b) => a.localeCompare(b));
 }
 
 async function spawnPuca(

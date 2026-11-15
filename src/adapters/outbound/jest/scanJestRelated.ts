@@ -27,7 +27,8 @@ export async function scanJestRelated(
 
   for (const spec of allSpecs) {
     const content = await fs.readFile(spec, "utf8");
-    const imported = resolveImportedPaths(spec, content);
+    // One-hop re-exports (barrel index → leaf) so inventory.js is covered via catalog/.
+    const imported = await resolveImportedPathsDeep(spec, content, 1);
     for (const candidate of candidateNorms) {
       if (!imported.has(candidate)) {
         continue;
@@ -107,6 +108,52 @@ function resolveImportedPaths(
     const absolute = path.resolve(dir, spec);
     for (const withExt of expandJsExtensions(absolute)) {
       resolved.add(normalizeModulePath(withExt));
+    }
+  }
+  return resolved;
+}
+
+/**
+ * Resolve relative imports, then follow up to `maxDepth` re-export hops
+ * (e.g. test → catalog/index.js → inventory.js).
+ */
+async function resolveImportedPathsDeep(
+  fromFile: string,
+  content: string,
+  maxDepth: number,
+): Promise<Set<string>> {
+  const resolved = resolveImportedPaths(fromFile, content);
+  if (maxDepth <= 0) {
+    return resolved;
+  }
+  const queue = [...resolved];
+  const seen = new Set(resolved);
+  let depth = 0;
+  let layerSize = queue.length;
+  while (queue.length > 0 && depth < maxDepth) {
+    const next = queue.shift()!;
+    layerSize -= 1;
+    let body: string;
+    try {
+      body = await fs.readFile(next, "utf8");
+    } catch {
+      if (layerSize === 0) {
+        depth += 1;
+        layerSize = queue.length;
+      }
+      continue;
+    }
+    for (const child of resolveImportedPaths(next, body)) {
+      if (seen.has(child)) {
+        continue;
+      }
+      seen.add(child);
+      resolved.add(child);
+      queue.push(child);
+    }
+    if (layerSize === 0) {
+      depth += 1;
+      layerSize = queue.length;
     }
   }
   return resolved;

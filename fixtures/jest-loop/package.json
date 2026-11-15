@@ -9,6 +9,7 @@
   },
   "jest": {
     "testEnvironment": "node",
+    "testTimeout": 2000,
     "testMatch": ["**/test/**/*.test.js"]
   }
 }

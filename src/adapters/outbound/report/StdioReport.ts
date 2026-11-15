@@ -9,6 +9,11 @@ import type { Mutant, SessionResult } from "../../../domain/mutant.js";
 import { formatFileSummaryTable } from "./formatFileSummaryTable.js";
 import { formatMutationLineDiff } from "./formatMutationContext.js";
 import { SourceTextCache } from "./sourceTextCache.js";
+import {
+  coloredStatusLabel,
+  sectionHeading,
+  shouldUseColor,
+} from "./terminalStyle.js";
 
 const DETAIL_STATUSES = new Set(["Survived", "Timeout", "RuntimeError"]);
 
@@ -16,17 +21,22 @@ export interface StdioReportOptions {
   readonly cwd?: string;
   readonly stdout?: NodeJS.WritableStream;
   readonly stderr?: NodeJS.WritableStream;
+  /** Override process.env for color decisions (tests). */
+  readonly env?: NodeJS.ProcessEnv;
 }
 
 /**
  * Terminal reporter: realtime mutant lines + five-bucket summary.
  * Survived/Timeout/Error get status + mutator + line-context diff;
  * Killed/NoCoverage stay compact (with a short before→after hint).
+ * Status words are colored only when the destination stream is a TTY
+ * and NO_COLOR is unset.
  */
 export class StdioReport implements ReportPort {
   private readonly cwd: string;
   private readonly stdout: NodeJS.WritableStream;
   private readonly stderr: NodeJS.WritableStream;
+  private readonly env: NodeJS.ProcessEnv;
   private readonly sources = new SourceTextCache();
   private streamedMutants = false;
   private progressDirty = false;
@@ -35,6 +45,7 @@ export class StdioReport implements ReportPort {
     this.cwd = options.cwd ?? process.cwd();
     this.stdout = options.stdout ?? process.stdout;
     this.stderr = options.stderr ?? process.stderr;
+    this.env = options.env ?? process.env;
   }
 
   writeNotice(line: string): void {
@@ -56,15 +67,23 @@ export class StdioReport implements ReportPort {
     this.clearProgressLine();
 
     if (DETAIL_STATUSES.has(mutant.status)) {
+      const color = shouldUseColor(this.stdout, this.env);
       this.stdout.write(
-        `${formatDetailBlock(mutant, this.cwd, this.sources, progress)}\n`,
+        `${formatDetailBlock(mutant, this.cwd, this.sources, color, progress)}\n`,
       );
       return;
     }
 
     // Compact live progress for Killed / NoCoverage so the run feels alive
     // without flooding Survived-style diff blocks.
-    const line = formatCompactProgress(mutant, this.cwd, this.sources, progress);
+    const color = shouldUseColor(this.stderr, this.env);
+    const line = formatCompactProgress(
+      mutant,
+      this.cwd,
+      this.sources,
+      progress,
+      color,
+    );
     if (this.isStderrTty()) {
       this.stderr.write(`\r${line}`);
       this.progressDirty = true;
@@ -81,6 +100,8 @@ export class StdioReport implements ReportPort {
       stream.write(`${result.message}\n`);
     }
 
+    const color = shouldUseColor(this.stdout, this.env);
+
     // Detail lines already streamed live; only dump them when writeTerminal
     // is used alone (tests / idle refuse paths with statuses).
     if (!this.streamedMutants) {
@@ -89,7 +110,7 @@ export class StdioReport implements ReportPort {
           continue;
         }
         this.stdout.write(
-          `${formatDetailBlock(mutant, this.cwd, this.sources)}\n`,
+          `${formatDetailBlock(mutant, this.cwd, this.sources, color)}\n`,
         );
       }
     }
@@ -125,11 +146,12 @@ function formatDetailBlock(
   mutant: Mutant,
   cwd: string,
   sources: SourceTextCache,
+  colorEnabled: boolean,
   progress?: MutantProgress,
 ): string {
   const rel = relativePath(cwd, mutant.site.file);
   const diff = formatMutationLineDiff(sources.get(mutant.site.file), mutant.site);
-  const status = statusLabel(mutant.status);
+  const status = coloredStatusLabel(mutant.status, colorEnabled);
   const head = progress != null
     ? `[${String(progress.index)}/${String(progress.total)}] ${status}  ${mutant.site.mutatorName}  ${rel}:${String(mutant.site.line)}:${String(mutant.site.column)}`
     : `${status}  ${mutant.site.mutatorName}  ${rel}:${String(mutant.site.line)}:${String(mutant.site.column)}`;
@@ -141,9 +163,10 @@ function formatCompactProgress(
   cwd: string,
   sources: SourceTextCache,
   progress: MutantProgress,
+  colorEnabled: boolean,
 ): string {
   const rel = relativePath(cwd, mutant.site.file);
-  const status = statusLabel(mutant.status);
+  const status = coloredStatusLabel(mutant.status, colorEnabled);
   const buckets = formatBucketShort(progress.counts);
   const loc = `${rel}:${String(mutant.site.line)}:${String(mutant.site.column)}`;
   const diff = formatMutationLineDiff(sources.get(mutant.site.file), mutant.site);
@@ -156,21 +179,6 @@ function compactHint(before: string, after: string): string {
   const a = before.length > max ? `${before.slice(0, max)}…` : before;
   const b = after.length > max ? `${after.slice(0, max)}…` : after;
   return `${a} → ${b}`;
-}
-
-function statusLabel(status: Mutant["status"]): string {
-  switch (status) {
-    case "Killed":
-      return "KILLED";
-    case "Survived":
-      return "SURVIVED";
-    case "Timeout":
-      return "TIMEOUT";
-    case "RuntimeError":
-      return "ERROR";
-    case "NoCoverage":
-      return "NO_COVERAGE";
-  }
 }
 
 function formatBucketShort(counts: BucketCounts): string {
@@ -189,7 +197,7 @@ function formatSummary(statuses: readonly Mutant[]): string {
 
   return [
     "",
-    "── Summary ──",
+    sectionHeading("Summary"),
     `Killed: ${counts.killed}`,
     `Survived: ${counts.survived}`,
     `Timeout: ${counts.timeout}`,

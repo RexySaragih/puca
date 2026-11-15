@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { Mutant, MutantStatus } from "../../../domain/mutant.js";
+import { sectionHeading } from "./terminalStyle.js";
 
 export interface FileSummaryRow {
   readonly file: string;
@@ -56,7 +57,7 @@ export function formatFileSummaryTable(
 
   const lines = [
     "",
-    "── File Summary ──",
+    sectionHeading("File Summary"),
     formatAlignedRow(header, widths, false),
     ...body.map((cells) => formatAlignedRow(cells, widths, true)),
   ];

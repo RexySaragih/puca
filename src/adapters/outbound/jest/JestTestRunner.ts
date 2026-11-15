@@ -1,3 +1,4 @@
+import { fork, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
@@ -16,7 +17,6 @@ import {
   setRamBuffer,
 } from "../vitest/pucaRamPlugin.js";
 import {
-  type JestRunCli,
   type JestRunCliResult,
   type ProjectJest,
   resolveJestTestTimeoutMs,
@@ -26,36 +26,43 @@ import { scanJestRelated } from "./scanJestRelated.js";
 
 const SESSION_ID = "jest-session";
 const DEFAULT_TEST_TIMEOUT_MS = 5000;
+const CHILD_WALL_MS = 120_000;
 
-const TRANSFORMER_PATH = path.join(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "pucaJestTransformer.cjs",
-);
+const here = path.dirname(fileURLToPath(import.meta.url));
+const TRANSFORMER_PATH = path.join(here, "pucaJestTransformer.cjs");
+const CHILD_MAIN_PATH = path.join(here, "jestChildMain.cjs");
 
 export interface JestTestRunnerOptions {
   /** Workspace root used to resolve jest and as Jest root. */
   readonly cwd?: string;
   /** Override resolver (tests). */
   readonly resolveJest?: (cwd: string) => ProjectJest;
+  /** Override child entry (tests). */
+  readonly childMainPath?: string;
 }
 
 /**
  * Production TestRunnerPort for `--runner jest` (ADR-037).
- * Single-worker only: RAM overlay via a Jest transformer + globalThis buffer map.
- * Never writes mutant sources to disk (no .puca-tmp / .stryker-tmp).
+ * Single-worker only: RAM overlay via Jest transformer in an **isolated child**
+ * per invoke (R5-Jest). In-process runCLI reused transformed modules after
+ * baseline, so mutants incorrectly Survived — child isolation fixes that.
+ * Never writes mutant sources to disk.
  */
 export class JestTestRunner implements TestRunnerPort {
   private overlay: RunnerOverlay | null = null;
-  private runCLI: JestRunCli | null = null;
   private relatedBySource: Map<string, readonly string[]> | null = null;
   private allSpecs: readonly string[] = [];
   private testTimeoutMs = DEFAULT_TEST_TIMEOUT_MS;
+  private sessionActive = false;
+  private activeChild: ChildProcess | null = null;
   private readonly cwd: string;
   private readonly resolveJest: (cwd: string) => ProjectJest;
+  private readonly childMainPath: string;
 
   constructor(options: JestTestRunnerOptions = {}) {
     this.cwd = options.cwd ?? process.cwd();
     this.resolveJest = options.resolveJest ?? resolveProjectJest;
+    this.childMainPath = options.childMainPath ?? CHILD_MAIN_PATH;
   }
 
   async startSession(overlay: RunnerOverlay): Promise<RunnerSession> {
@@ -64,11 +71,11 @@ export class JestTestRunner implements TestRunnerPort {
     this.relatedBySource = null;
     this.allSpecs = [];
 
-    const project = this.resolveJest(this.cwd);
-    this.runCLI = project.runCLI;
+    // Resolve early so missing jest fails closed before scoring.
+    this.resolveJest(this.cwd);
     this.testTimeoutMs =
       (await resolveJestTestTimeoutMs(this.cwd)) ?? DEFAULT_TEST_TIMEOUT_MS;
-    publishBuffers(overlay.buffers);
+    this.sessionActive = true;
 
     return { id: SESSION_ID };
   }
@@ -89,7 +96,7 @@ export class JestTestRunner implements TestRunnerPort {
   }
 
   async baseline(specs: readonly string[]): Promise<BaselineResult> {
-    if (this.runCLI == null) {
+    if (!this.sessionActive) {
       throw new Error("JestTestRunner.baseline requires an active session");
     }
     if (specs.length === 0) {
@@ -117,12 +124,10 @@ export class JestTestRunner implements TestRunnerPort {
       throw new Error("JestTestRunner.setBuffer requires an active session");
     }
     setRamBuffer(this.overlay.buffers, file, source);
-    publishBuffers(this.overlay.buffers);
   }
 
   invalidateFile(_file: AbsolutePath): void {
-    // Each runCLI is a fresh Jest process graph with cache:false;
-    // transformer getCacheKey already keys on active buffer content.
+    // Child process isolation — no parent-side module graph to invalidate.
   }
 
   getTestTimeoutMs(): number {
@@ -130,10 +135,9 @@ export class JestTestRunner implements TestRunnerPort {
   }
 
   async runRelated(mutant: MutantRunRequest): Promise<RelatedRunResult> {
-    if (this.runCLI == null) {
+    if (!this.sessionActive) {
       throw new Error("JestTestRunner.runRelated requires an active session");
     }
-    publishBuffers(this.overlay?.buffers);
     try {
       const result = await this.invokeJest(mutant.relatedSpecs);
       return classifyJestRun(result, mutant.relatedSpecs);
@@ -153,10 +157,23 @@ export class JestTestRunner implements TestRunnerPort {
   }
 
   async close(): Promise<void> {
-    this.runCLI = null;
+    this.sessionActive = false;
     this.relatedBySource = null;
     this.allSpecs = [];
-    clearPublishedBuffers();
+    this.killActiveChild();
+  }
+
+  private killActiveChild(): void {
+    const child = this.activeChild;
+    if (child == null) {
+      return;
+    }
+    this.activeChild = null;
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      // already exited
+    }
   }
 
   /** Clear RAM buffer for a file (tests / leak proofs). */
@@ -165,55 +182,101 @@ export class JestTestRunner implements TestRunnerPort {
       throw new Error("JestTestRunner.clearBuffer requires an active session");
     }
     clearRamBuffer(this.overlay.buffers, file);
-    publishBuffers(this.overlay.buffers);
   }
 
   private async invokeJest(
     specs: readonly string[],
   ): Promise<JestRunCliResult> {
-    if (this.runCLI == null) {
-      throw new Error("JestTestRunner.invokeJest requires an active session");
-    }
     const uniqueSpecs = [...new Set(specs.map((s) => normalizeModulePath(s)))];
-    const argv: Record<string, unknown> = {
-      _: uniqueSpecs,
-      $0: "jest",
-      runInBand: true,
-      maxWorkers: 1,
-      cache: false,
-      coverage: false,
-      watch: false,
-      watchAll: false,
-      notify: false,
-      passWithNoTests: true,
-      silent: true,
-      verbose: false,
-      testTimeout: this.testTimeoutMs,
-      // Inline config so the RAM transformer is always registered (no disk mutant).
-      config: JSON.stringify({
-        rootDir: this.cwd,
-        maxWorkers: 1,
-        transform: {
-          "^.+\\.[cm]?[jt]sx?$": TRANSFORMER_PATH,
-        },
-      }),
-    };
+    const buffers = serializeBuffers(this.overlay?.buffers);
 
-    return this.runCLI(argv, [this.cwd]);
+    return new Promise((resolve, reject) => {
+      this.killActiveChild();
+      const child: ChildProcess = fork(this.childMainPath, [], {
+        cwd: this.cwd,
+        stdio: ["ignore", "ignore", "ignore", "ipc"],
+        env: { ...process.env, FORCE_COLOR: "0" },
+      });
+      this.activeChild = child;
+      let settled = false;
+
+      const settle = (fn: () => void): void => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        if (this.activeChild === child) {
+          this.activeChild = null;
+        }
+        fn();
+      };
+
+      const timer = setTimeout(() => {
+        child.kill("SIGKILL");
+        settle(() => reject(new Error("Jest child timed out")));
+      }, CHILD_WALL_MS);
+
+      child.on("error", (error) => {
+        settle(() => reject(error));
+      });
+
+      child.on("message", (msg: unknown) => {
+        const payload = msg as {
+          type?: string;
+          ok?: boolean;
+          results?: JestRunCliResult["results"];
+          error?: string;
+        };
+        if (payload.type !== "result") {
+          return;
+        }
+        if (payload.ok === true && payload.results != null) {
+          const results = payload.results;
+          settle(() => resolve({ results }));
+        } else {
+          settle(() =>
+            reject(new Error(payload.error ?? "Jest child failed")),
+          );
+        }
+      });
+
+      child.on("exit", (code, signal) => {
+        if (settled) {
+          return;
+        }
+        settle(() =>
+          reject(
+            new Error(
+              `Jest child exited before result (code=${String(code)}, signal=${String(signal)})`,
+            ),
+          ),
+        );
+      });
+
+      child.send({
+        type: "run",
+        cwd: this.cwd,
+        specs: uniqueSpecs,
+        buffers,
+        testTimeoutMs: this.testTimeoutMs,
+        transformerPath: TRANSFORMER_PATH,
+      });
+    });
   }
 }
 
-function publishBuffers(
+function serializeBuffers(
   buffers: Map<string, string | null> | undefined,
-): void {
-  (
-    globalThis as { __PUCA_JEST_BUFFERS__?: Map<string, string | null> }
-  ).__PUCA_JEST_BUFFERS__ = buffers;
-}
-
-function clearPublishedBuffers(): void {
-  delete (globalThis as { __PUCA_JEST_BUFFERS__?: Map<string, string | null> })
-    .__PUCA_JEST_BUFFERS__;
+): Array<[string, string | null]> {
+  if (buffers == null) {
+    return [];
+  }
+  const out: Array<[string, string | null]> = [];
+  for (const [file, source] of buffers) {
+    out.push([file, source]);
+  }
+  return out;
 }
 
 function classifyJestRun(

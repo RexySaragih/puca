@@ -29,7 +29,9 @@ import { NO_FILES_TO_MUTATE_MESSAGE } from "../src/domain/targetingErrors.js";
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
 
-function captureStream(): { stream: Writable; text: () => string } {
+function captureStream(
+  options: { isTTY?: boolean } = {},
+): { stream: Writable; text: () => string } {
   let buf = "";
   const stream = new Writable({
     write(chunk, _encoding, callback) {
@@ -37,6 +39,9 @@ function captureStream(): { stream: Writable; text: () => string } {
       callback();
     },
   });
+  if (options.isTTY === true) {
+    (stream as NodeJS.WriteStream).isTTY = true;
+  }
   return {
     stream,
     text: () => buf,
@@ -464,6 +469,82 @@ describe("CLI terminal report and exit codes", () => {
       expect(survivedBlocks).toBe(1);
       expect(out.text()).toContain("── Summary ──");
       expect(out.text()).toMatch(/Survived: 1/);
+    });
+
+    it("should color status words on TTY when NO_COLOR is unset", async () => {
+      const cwd = "/tmp/puca-cli-color";
+      const file = toAbsolutePath(path.join(cwd, "src/color.ts"));
+      const out = captureStream({ isTTY: true });
+      const err = captureStream({ isTTY: true });
+      const report = new StdioReport({
+        cwd,
+        stdout: out.stream,
+        stderr: err.stream,
+        env: {},
+      });
+
+      report.writeMutantResult(
+        {
+          site: siteFor(cwd, file, 4, "ArithmeticOperator", "+", "-"),
+          status: "Killed",
+          killedBy: "t1",
+        },
+        {
+          index: 1,
+          total: 2,
+          counts: {
+            killed: 1,
+            survived: 0,
+            timeout: 0,
+            error: 0,
+            noCoverage: 0,
+          },
+        },
+      );
+      report.writeMutantResult(
+        {
+          site: siteFor(cwd, file, 8, "LogicalOperator", "&&", "||"),
+          status: "Survived",
+        },
+        {
+          index: 2,
+          total: 2,
+          counts: {
+            killed: 1,
+            survived: 1,
+            timeout: 0,
+            error: 0,
+            noCoverage: 0,
+          },
+        },
+      );
+
+      expect(err.text()).toMatch(/\x1b\[32mKILLED\x1b\[0m/);
+      expect(out.text()).toMatch(/\x1b\[31mSURVIVED\x1b\[0m/);
+    });
+
+    it("should skip ANSI color when NO_COLOR is set on a TTY", async () => {
+      const cwd = "/tmp/puca-cli-nocolor";
+      const file = toAbsolutePath(path.join(cwd, "src/nocolor.ts"));
+      const out = captureStream({ isTTY: true });
+      const report = new StdioReport({
+        cwd,
+        stdout: out.stream,
+        env: { NO_COLOR: "1" },
+      });
+
+      await report.writeTerminal({
+        statuses: [
+          {
+            site: siteFor(cwd, file, 8, "LogicalOperator", "&&", "||"),
+            status: "Survived",
+          },
+        ],
+        exitCode: 1,
+      });
+
+      expect(out.text()).toContain("SURVIVED  LogicalOperator");
+      expect(out.text()).not.toMatch(/\x1b\[/);
     });
   });
 

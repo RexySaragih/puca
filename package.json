@@ -15,7 +15,7 @@
     "node": ">=20.6.0"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && cp src/adapters/outbound/jest/pucaJestTransformer.cjs dist/adapters/outbound/jest/pucaJestTransformer.cjs && napi build --platform --release --package puca-binding",
+    "build": "tsc -p tsconfig.build.json && cp src/adapters/outbound/jest/pucaJestTransformer.cjs dist/adapters/outbound/jest/pucaJestTransformer.cjs && cp src/adapters/outbound/jest/jestChildMain.cjs dist/adapters/outbound/jest/jestChildMain.cjs && napi build --platform --release --package puca-binding",
     "test": "vitest run",
     "test:watch": "vitest",
     "lint:deps": "tsc -p tsconfig.build.json && depcruise --config dependency-cruiser.cjs dist/domain dist/application",
