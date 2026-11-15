@@ -37,8 +37,5 @@ crates/puca-binding/*.node
 crates/puca-binding/index.js
 crates/puca-binding/index.d.ts
 
-# Tools
-.planora
-
 # Opt-in mutant status cache (ADR-035)
 .puca/
