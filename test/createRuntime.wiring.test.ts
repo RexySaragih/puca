@@ -13,9 +13,11 @@ import {
 } from "../src/adapters/outbound/memory/index.js";
 import { NapiMutatorEngine } from "../src/adapters/outbound/napi/NapiMutatorEngine.js";
 import { CompositeReport } from "../src/adapters/outbound/report/CompositeReport.js";
+import { HtmlFile } from "../src/adapters/outbound/report/HtmlFile.js";
 import { SarifFile } from "../src/adapters/outbound/report/SarifFile.js";
 import { SchemaJsonFile } from "../src/adapters/outbound/report/SchemaJsonFile.js";
 import { StdioReport } from "../src/adapters/outbound/report/StdioReport.js";
+import { JestTestRunner } from "../src/adapters/outbound/jest/JestTestRunner.js";
 import { PooledVitestTestRunner } from "../src/adapters/outbound/vitest/PooledVitestTestRunner.js";
 import { VitestTestRunner } from "../src/adapters/outbound/vitest/VitestTestRunner.js";
 import { createRuntime } from "../src/composition/createRuntime.js";
@@ -42,6 +44,7 @@ describe("createRuntime wiring", () => {
       expect(report.stdio).toBeInstanceOf(StdioReport);
       expect(report.schemaJson).toBeInstanceOf(SchemaJsonFile);
       expect(report.sarifFile).toBeInstanceOf(SarifFile);
+      expect(report.htmlFile).toBeInstanceOf(HtmlFile);
 
       expect(runtime.files).not.toBeInstanceOf(InMemoryFiles);
       expect(runtime.sourceLocator).not.toBeInstanceOf(InMemorySourceLocator);
@@ -86,6 +89,27 @@ describe("createRuntime wiring", () => {
       });
       expect(sequential.testRunner).toBeInstanceOf(VitestTestRunner);
       expect(sequential.testRunner).not.toBeInstanceOf(PooledVitestTestRunner);
+    });
+
+    it("should wire VitestTestRunner by default and JestTestRunner when runner is jest (AC5)", () => {
+      const vitestDefault = createRuntime({ cwd: repoRoot });
+      expect(vitestDefault.testRunner).toBeInstanceOf(VitestTestRunner);
+      expect(vitestDefault.testRunner).not.toBeInstanceOf(JestTestRunner);
+
+      const vitestExplicit = createRuntime({
+        cwd: repoRoot,
+        runner: "vitest",
+      });
+      expect(vitestExplicit.testRunner).toBeInstanceOf(VitestTestRunner);
+
+      const jestRuntime = createRuntime({
+        cwd: repoRoot,
+        runner: "jest",
+        workers: 4,
+      });
+      expect(jestRuntime.testRunner).toBeInstanceOf(JestTestRunner);
+      expect(jestRuntime.testRunner).not.toBeInstanceOf(VitestTestRunner);
+      expect(jestRuntime.testRunner).not.toBeInstanceOf(PooledVitestTestRunner);
     });
   });
 

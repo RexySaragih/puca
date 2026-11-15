@@ -26,3 +26,16 @@ export class EmptyMutateMatchError extends Error {
     );
   }
 }
+
+/**
+ * --workspace matched no declared package roots (ADR-036 / SC-345 refuse, exit 2).
+ */
+export class EmptyWorkspaceMatchError extends Error {
+  readonly name = "EmptyWorkspaceMatchError";
+
+  constructor(workspaceGlob: string) {
+    super(
+      `Error: No packages matched --workspace '${workspaceGlob}'. Refused to score.`,
+    );
+  }
+}

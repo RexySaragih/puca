@@ -3,9 +3,10 @@
  * See HARD_EXCLUDE_GLOBS for the exact micromatch-style patterns.
  */
 export const HARD_EXCLUDE_GLOBS = [
-  "**/*.{test,spec}.{ts,tsx}",
+  "**/*.{test,spec}.{ts,tsx,js,jsx,mjs,cjs}",
   "**/vitest.config.*",
   "**/vite.config.*",
+  "**/jest.config.*",
   "**/*.d.ts",
   "**/node_modules/**",
   "**/dist/**",
@@ -30,7 +31,10 @@ export function isHardExcluded(relativePath: string): boolean {
   if (baseName.startsWith("vite.config.")) {
     return true;
   }
-  if (/\.(test|spec)\.(ts|tsx)$/.test(baseName)) {
+  if (baseName.startsWith("jest.config.")) {
+    return true;
+  }
+  if (/\.(test|spec)\.([cm]?[jt]sx?)$/.test(baseName)) {
     return true;
   }
   return false;

@@ -12,12 +12,20 @@ export interface ParsedCliArgs {
   readonly failOnNoCoverage: boolean;
   /** Opt-in SARIF output path. Unset when flag omitted. */
   readonly sarifPath?: string;
+  /** Opt-in HTML report path. Unset when flag omitted. */
+  readonly htmlPath?: string;
+  /** Opt-in persistent cache (Wave B). */
+  readonly cache: boolean;
+  /** Opt-in workspace glob (Wave C). */
+  readonly workspaceGlob?: string;
+  /** Test runner: vitest (default) | jest (Wave D). */
+  readonly runner: "vitest" | "jest";
 }
 
 /**
  * Parse `puca` flags from argv (without node/script). cwd is always process.cwd() at the CLI.
  * Flags: --mutate, --json, --timeout, --include-untracked, --verbose, --workers,
- * --break-on-score, --fail-on-no-coverage, --sarif.
+ * --break-on-score, --fail-on-no-coverage, --sarif, --html, --cache, --workspace, --runner.
  */
 export function parseArgs(argv: readonly string[]): ParsedCliArgs {
   let mutateGlob: string | undefined;
@@ -29,6 +37,10 @@ export function parseArgs(argv: readonly string[]): ParsedCliArgs {
   let breakOnScore: number | undefined;
   let failOnNoCoverage = false;
   let sarifPath: string | undefined;
+  let htmlPath: string | undefined;
+  let cache = false;
+  let workspaceGlob: string | undefined;
+  let runner: "vitest" | "jest" = "vitest";
 
   for (let i = 0; i < argv.length; i += 1) {
     const token = argv[i];
@@ -70,8 +82,30 @@ export function parseArgs(argv: readonly string[]): ParsedCliArgs {
       i += 1;
       continue;
     }
+    if (token === "--html") {
+      const raw = requireOptionalValue(argv, i, "--html");
+      htmlPath = parseHtmlPath(raw);
+      i += 1;
+      continue;
+    }
+    if (token === "--workspace") {
+      const raw = requireOptionalValue(argv, i, "--workspace");
+      workspaceGlob = parseWorkspaceGlob(raw);
+      i += 1;
+      continue;
+    }
+    if (token === "--runner") {
+      const raw = requireOptionalValue(argv, i, "--runner");
+      runner = parseRunner(raw);
+      i += 1;
+      continue;
+    }
     if (token === "--fail-on-no-coverage") {
       failOnNoCoverage = true;
+      continue;
+    }
+    if (token === "--cache") {
+      cache = true;
       continue;
     }
     if (token === "--include-untracked") {
@@ -106,6 +140,18 @@ export function parseArgs(argv: readonly string[]): ParsedCliArgs {
       sarifPath = parseSarifPath(token.slice("--sarif=".length));
       continue;
     }
+    if (token.startsWith("--html=")) {
+      htmlPath = parseHtmlPath(token.slice("--html=".length));
+      continue;
+    }
+    if (token.startsWith("--workspace=")) {
+      workspaceGlob = parseWorkspaceGlob(token.slice("--workspace=".length));
+      continue;
+    }
+    if (token.startsWith("--runner=")) {
+      runner = parseRunner(token.slice("--runner=".length));
+      continue;
+    }
 
     throw new Error(`Unknown argument: ${token}`);
   }
@@ -120,6 +166,10 @@ export function parseArgs(argv: readonly string[]): ParsedCliArgs {
     breakOnScore,
     failOnNoCoverage,
     sarifPath,
+    htmlPath,
+    cache,
+    workspaceGlob,
+    runner,
   };
 }
 
@@ -191,4 +241,35 @@ export function parseSarifPath(raw: string): string {
     );
   }
   return raw;
+}
+
+/** Non-empty path (REQ-1701 / SC-345). */
+export function parseHtmlPath(raw: string): string {
+  if (raw.trim() === "") {
+    throw new Error(
+      "Error: Invalid value for --html. Expected a valid file path, received empty or missing argument.",
+    );
+  }
+  return raw;
+}
+
+/** Non-empty workspace glob (REQ-1901 / SC-345). */
+export function parseWorkspaceGlob(raw: string): string {
+  if (raw.trim() === "") {
+    throw new Error(
+      "Error: Invalid value for --workspace. Expected a non-empty glob, received empty or missing argument.",
+    );
+  }
+  return raw;
+}
+
+/** vitest | jest (REQ-2001 / SC-345). */
+export function parseRunner(raw: string): "vitest" | "jest" {
+  const value = raw.trim();
+  if (value === "vitest" || value === "jest") {
+    return value;
+  }
+  throw new Error(
+    `Error: Invalid value for --runner. Expected 'vitest' or 'jest', received '${value}'.`,
+  );
 }

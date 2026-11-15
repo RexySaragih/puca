@@ -2,15 +2,15 @@
 
 Local mutation-testing loop for **TypeScript ESM + Vitest**.
 
-Púca mutates the files you just changed (or an explicit glob), injects each mutant **in RAM** through a Vite plugin, runs only the related Vitest specs on a keep-alive session, and reports what survived — without Stryker-style sandbox copies, Jest, or V8 coverage maps.
+Púca mutates the files you just changed (or an explicit glob), injects each mutant **in RAM**, runs only the related specs on a keep-alive session (Vitest by default; opt-in `--runner jest`), and reports what survived — without Stryker-style sandbox copies or V8 coverage maps.
 
-`puca` is **not published to the npm registry** this cycle. Contributors source-build with Rust; Phase 3.1 also ships **GitHub Release** tarball pairs (`puca` root + `puca-<abi>`) for rust-free hosts.
+`puca` is **not published to the npm registry** through Phase 3 (deferred to Phase 4). Contributors source-build with Rust; Phase 3 also ships **GitHub Release** tarball pairs (`puca` root + `puca-<abi>`) for rust-free hosts.
 
 ```mermaid
 flowchart LR
   Dirty["Dirty .ts / .tsx<br/>or --mutate glob"] --> Discover["Oxc discover<br/>(NAPI)"]
-  Discover --> Loop["RAM inject → related Vitest"]
-  Loop --> Report["Terminal + optional JSON"]
+  Discover --> Loop["RAM inject → related tests"]
+  Loop --> Report["Terminal + optional JSON / SARIF / HTML"]
   Report --> Exit["Exit 0 / 1 / 2"]
 ```
 
@@ -43,7 +43,7 @@ Mutation testing is deliberate shapeshifting: the tool quietly changes the shape
 
 - **Node** `>= 20.6.0`
 - **Rust** stable (pinned in `rust-toolchain.toml`) for `npm run build`
-- A target project with **Vitest ≥ 4** installed in that project’s `node_modules` (resolved from `cwd`, never bundled into Púca)
+- A target project with **Vitest ≥ 4** installed in that project’s `node_modules` (default runner; resolved from `cwd`, never bundled into Púca). For `--runner jest`, install **jest** in that project instead.
 - **Git** on `PATH` when using default dirty-file targeting (not needed with `--mutate`)
 
 ---
@@ -61,7 +61,9 @@ npm run build   # tsc → dist/ + napi-rs .node addon
 
 The binary entry is `dist/cli.js` (`package.json` `bin.puca`).
 
-### Install from GitHub Release tarballs (Phase 3.1, rust-free)
+### Install from GitHub Release tarballs (Phase 3 distribution, rust-free)
+
+Tag pushes (`v*`) run [`.github/workflows/release.yml`](./.github/workflows/release.yml): a matrix builds native addons for `darwin-arm64`, `darwin-x64`, `linux-x64-gnu`, and `win32-x64-msvc`, packs `puca-0.2.0.tgz` plus `puca-<abi>-0.2.0.tgz`, smoke-tests rust-free installs, and uploads those tarballs to a **GitHub Release**. There is **no** `npm publish`, **no** `NPM_TOKEN`, and **no** OIDC trusted-publishing step in Phase 3.
 
 Download the matching pair from the [GitHub Releases](https://github.com/RexySaragih/puca/releases) page — root `puca-0.2.0.tgz` plus host `puca-<abi>-0.2.0.tgz` (for example `puca-darwin-arm64-0.2.0.tgz`). Install **both** into a workspace (not `npm install -g puca` from the registry):
 
@@ -71,7 +73,7 @@ npm install ./puca-0.2.0.tgz ./puca-darwin-arm64-0.2.0.tgz
 ./node_modules/.bin/puca --mutate 'src/**/*.ts'
 ```
 
-Do not use `--no-optional` once platform packages are wired as optionals in a later cycle; this cycle installs the abi tarball explicitly beside the root.
+Phase 3 installs the abi tarball explicitly beside the root (not via git `optionalDependencies`).
 
 ---
 
@@ -105,13 +107,55 @@ puca --mutate 'src/**/*.ts' --workers 4
 puca --mutate 'src/**/*.ts' --break-on-score 80
 puca --mutate 'src/**/*.ts' --fail-on-no-coverage
 puca --mutate 'src/**/*.ts' --sarif ./puca.sarif
+
+# Phase 3.4 — HTML, cache, workspace, Jest (all opt-in; Vitest-first default)
+puca --mutate 'src/**/*.ts' --html ./puca-report.html
+puca --mutate 'src/**/*.ts' --cache
+puca --workspace 'packages/*' --mutate 'src/**/*.ts'
+puca --runner jest --mutate 'src/**/*.ts'
 ```
 
 Invalid `--workers` (`0`, floats, non-integers, missing value) → exit **2** with a stderr diagnostic naming `--workers`.
 
-Invalid `--break-on-score` (non-integer, out of 1..100, missing value) → exit **2** naming `--break-on-score`. Missing/empty `--sarif` path → exit **2** naming `--sarif`.
+Invalid `--break-on-score` (non-integer, out of 1..100, missing value) → exit **2** naming `--break-on-score`. Missing/empty `--sarif` or `--html` path → exit **2** naming that flag. Invalid `--runner` (not `vitest`|`jest`) or empty `--workspace` → exit **2**.
 
 **CI gates (opt-in):** session score = `Killed / (Killed + Survived)` (N/A when denom is 0 — score gate does not fail). Exit priority: any RuntimeError → **2**; else Survived ≥ 1 **or** score `< n` **or** (`--fail-on-no-coverage` and NoCoverage ≥ 1) → **1**; else **0**. `--sarif` writes Survived-only SARIF 2.1.0 for GitHub Code Scanning upload (no default path).
+
+**Phase 3.4 extras (opt-in):**
+
+| Flag | Behavior |
+| --- | --- |
+| `--html <path>` | One self-contained offline HTML report (inline CSS/JS; no Stryker UI package, no CDN) |
+| `--cache` | Metadata-only `.puca/cache.json` under cwd (or per-package under `--workspace`); skips re-scoring unchanged sites |
+| `--workspace <glob>` | Sequential sessions for matching packages; process exit is worst-of `2 > 1 > 0` |
+| `--runner vitest\|jest` | Default Vitest; Jest resolves from cwd, soft-forces `workers=1` |
+
+### CI merge-gate examples
+
+```bash
+# Fail the job if mutation score drops below 80, or any mutant has no covering tests
+puca --mutate 'src/**/*.ts' \
+  --break-on-score 80 \
+  --fail-on-no-coverage \
+  --sarif ./puca.sarif \
+  --json ./mutation-report.json \
+  --html ./puca-report.html
+
+# Monorepo: score each package sequentially; process exit is worst-of
+puca --workspace 'packages/*' --mutate 'src/**/*.ts' --break-on-score 75 --cache
+
+# Upload Survived annotations (GitHub Code Scanning) — file only; no GitHub API client in puca
+# then: upload ./puca.sarif via your workflow's code-scanning action
+```
+
+Install in CI from **GitHub Release** tarballs (not `npm install -g puca`):
+
+```bash
+curl -fsSL -o puca.tgz "https://github.com/RexySaragih/puca/releases/download/v0.2.0/puca-0.2.0.tgz"
+curl -fsSL -o puca-abi.tgz "https://github.com/RexySaragih/puca/releases/download/v0.2.0/puca-linux-x64-gnu-0.2.0.tgz"
+npm install ./puca.tgz ./puca-abi.tgz
+./node_modules/.bin/puca --mutate 'src/**/*.ts' --break-on-score 80
+```
 
 ### Fixture smoke
 
@@ -236,9 +280,9 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for ports, composition root, and the mu
 
 ## Out of scope this cycle
 
-Jest · `node:test` register hooks · Browser Mode · CJS · SFC frameworks · multi-project Vitest · npm registry publish · git `optionalDependencies` on unpublished names · `puca.config.ts` · HTML reporter (`mutation-testing-elements`, Phase 3.4) · `@puca` npm scope · Windows as a hard gate.
+`node:test` register hooks · Browser Mode · CJS · SFC frameworks · Jest multi-worker pools · npm registry publish (Phase 4) · git `optionalDependencies` on unpublished names · `puca.config.ts` · `@stryker-mutator/*` / `mutation-testing-elements` (HTML is native) · `@puca` npm scope · Windows as a hard gate.
 
-Phase 3.1 **does** ship GHA-packed GitHub Release tarballs (root + abi); that is not npm `optionalDependencies` prebuilds.
+Phase 3 **does** ship GHA-packed GitHub Release tarballs (root + abi), native `--html`, opt-in `--cache`, `--workspace`, and `--runner jest` (single-worker). That is not npm `optionalDependencies` prebuilds and not an npm publish unlock.
 
 ---
 

@@ -12,16 +12,19 @@ flowchart LR
   UC --> Domain["domain<br/>Site · Mutant · SessionResult"]
   UC --> Ports["Outbound ports"]
   Ports --> Mutator["NapiMutatorEngine<br/>puca-core via NAPI"]
-  Ports --> Runner["VitestTestRunner<br/>+ RAM plugin"]
+  Ports --> Runner["VitestTestRunner or JestTestRunner"]
   Ports --> Locator["GitDiffLocator"]
   Ports --> Files["NodeWorkspaceFiles"]
-  Ports --> Report["StdioReport + SchemaJsonFile + SarifFile"]
+  Ports --> Report["Stdio + SchemaJson + Sarif + HtmlFile"]
+  Ports --> Cache["FileHashCache<br/>(opt-in --cache)"]
+  Ports --> Workspace["WorkspaceDiscovery<br/>(opt-in --workspace)"]
 ```
 
 - **TypeScript** owns orchestration (hexagonal).
 - **Rust (`puca-core`)** owns parse + site discovery + lazy apply (oxc).
 - **napi-rs (`puca-binding`)** exposes `discover` / `apply` to Node.
-- **Vitest** is resolved from the **user project** `cwd`, never bundled.
+- **Vitest** is the default runner, resolved from the **user project** `cwd`, never bundled. **Jest** is opt-in via `--runner jest` (single-worker).
+- **`--workspace`** wraps sequential per-package sessions (`WorkspaceTargetResolver`); exit is worst-of `2 > 1 > 0`.
 
 ---
 
@@ -47,8 +50,9 @@ flowchart LR
     P1[NodeWorkspaceFiles]
     P2[GitDiffLocator]
     P3[NapiMutatorEngine]
-    P4[VitestTestRunner]
-    P5[StdioReport + SchemaJsonFile + SarifFile]
+    P4[VitestTestRunner / JestTestRunner]
+    P5[Stdio + SchemaJson + Sarif + HtmlFile]
+    P6[FileHashCache when --cache]
   end
   subgraph fakes ["createRuntime({ useFakes: true })"]
     F1[InMemoryFiles]
@@ -92,12 +96,14 @@ Composition root is the **only** place that chooses prod vs fake adapters. Do no
 
 | Port | Responsibility | Prod | Fake |
 | --- | --- | --- | --- |
-| `RunMutationSession` | Inbound: run a session | CLI + tests | — |
+| `RunMutationSession` | Inbound: run a session (or sequential workspace sessions) | CLI + `WorkspaceTargetResolver` | — |
 | `MutatorEnginePort` | `discover` / `apply` | `NapiMutatorEngine` | `FakeMutatorEngine` |
-| `TestRunnerPort` | Session, reverse map, baseline, runRelated, respawn (**unexported**) | `VitestTestRunner` | `FakeTestRunner` |
+| `TestRunnerPort` | Session, reverse map, baseline, runRelated, respawn (**unexported**) | `VitestTestRunner` (default) / `JestTestRunner` (`--runner jest`) | `FakeTestRunner` |
 | `SourceLocatorPort` | Candidate files | `GitDiffLocator` | `InMemorySourceLocator` |
 | `WorkspaceFilesPort` | `readUtf8` / `exists` / `isUnderCwd` | `NodeWorkspaceFiles` | `InMemoryFiles` |
-| `ReportPort` | Terminal (+ optional JSON + optional SARIF); File Summary is StdioReport-only (ADR-030); `writeSarif?` additive (ADR-033) | `StdioReport` + `SchemaJsonFile` + `SarifFile` | `RecordingReport` |
+| `ReportPort` | Terminal (+ optional JSON / SARIF / HTML); File Summary is StdioReport-only (ADR-030); `writeSarif?` (ADR-033); `writeHtml?` (ADR-034) | `StdioReport` + `SchemaJsonFile` + `SarifFile` + `HtmlFile` | `RecordingReport` |
+| `CachePort` | Opt-in status metadata cache (`--cache`); never mutated source (ADR-035) | `FileHashCache` | memory / no-op |
+| `WorkspaceDiscoveryPort` | Resolve package roots for `--workspace` glob (ADR-036) | `NodeWorkspaceDiscovery` | fixture discovery |
 
 Clock / IDs are composition helpers, not ports (A12).
 
@@ -109,6 +115,7 @@ flowchart LR
   UC --> S[SourceLocatorPort]
   UC --> W[WorkspaceFilesPort]
   UC --> R[ReportPort]
+  UC --> C[CachePort]
 ```
 
 ---
@@ -145,6 +152,46 @@ flowchart TD
 ```
 
 Site id: `{relpath}:{startOffset}:{mutatorName}:{replacement}`.
+
+---
+
+## Cache schema (ADR-035)
+
+Path: `{cwd}/.puca/cache.json` (per-package under `--workspace`). Opt-in via `--cache` only.
+
+```json
+{
+  "schemaVersion": 1,
+  "engineVersion": "1",
+  "entries": {
+    "<sha256-key>": {
+      "status": "Killed",
+      "killedBy": "optional-test-id",
+      "schemaVersion": 1
+    }
+  }
+}
+```
+
+- **Key** = `sha256(engineVersion ⊕ file ⊕ start ⊕ end ⊕ mutator ⊕ replacement ⊕ relatedTestContents)`
+- **Allowed fields** on entries: `status`, optional `killedBy`, `schemaVersion`
+- **Forbidden**: any `mutatedSource` (or other source buffers) — load fail-opens to empty
+- Corrupt / truncated / version mismatch → ignore file, full score, rewrite on flush
+- Bump `CACHE_SCHEMA_VERSION` or `CACHE_ENGINE_VERSION` in `FileHashCache.ts` to wipe incompatible hits
+
+---
+
+## Module boundaries (enforced)
+
+| Layer | May import | Must not import |
+| --- | --- | --- |
+| `domain/` | nothing framework | `node:*`, vitest, vite, napi, `child_process` |
+| `application/` | `domain/`, ports only | vitest, vite, napi, `child_process`, `node:fs` for cache I/O |
+| `adapters/` | ports + Node/Vitest/Jest/NAPI | — |
+| `composition/createRuntime.ts` | adapters + use case | invent alternate adapter names |
+| `crates/puca-core` | oxc | Vitest / Git / Node |
+
+`npm run lint:deps` cruises `dist/domain` + `dist/application`.
 
 ---
 
@@ -197,6 +244,11 @@ Missing `.node` after clone → exit 2 until `npm run build`.
 | ADR-031 | Opt-in CI flags (`--break-on-score`, `--fail-on-no-coverage`, `--sarif`); default path unchanged |
 | ADR-032 | `evaluateQualityGates` + use-case exit authority; Survived never suppressed by score ≥ n |
 | ADR-033 | Additive `writeSarif?` + `SarifFile`; Survived-only SARIF 2.1.0; explicit `--sarif <path>` |
+| ADR-034 | Native self-contained HTML (`HtmlFile`); ban scoped `@stryker-mutator/*` UI; keep `mutation-testing-report-schema` for `--json` |
+| ADR-035 | `CachePort` + `FileHashCache` metadata-only `.puca/cache.json`; opt-in `--cache` |
+| ADR-036 | `WorkspaceDiscoveryPort` + sequential package sessions; worst-of exit `2 > 1 > 0` |
+| ADR-037 | `JestTestRunner` single-worker; soft-force `workers=1` under `--runner jest` |
+| ADR-038 | Phase 3 distribution remains GitHub Releases only; npm registry publish deferred to Phase 4 |
 
 ---
 

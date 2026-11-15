@@ -19,6 +19,14 @@ export interface MutationSessionInput {
   readonly failOnNoCoverage?: boolean;
   /** Opt-in SARIF output path (`--sarif`). */
   readonly sarifPath?: string;
+  /** Opt-in HTML report path (`--html`). */
+  readonly htmlPath?: string;
+  /** Opt-in persistent cache (`--cache`). */
+  readonly cache?: boolean;
+  /** Opt-in workspace package glob (`--workspace`). */
+  readonly workspaceGlob?: string;
+  /** Test runner selection (`--runner`). Default vitest. */
+  readonly runner?: "vitest" | "jest";
 }
 
 /**

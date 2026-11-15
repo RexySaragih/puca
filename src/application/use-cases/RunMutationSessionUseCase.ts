@@ -18,6 +18,7 @@ import type {
   MutationSessionInput,
   RunMutationSession,
 } from "../ports/inbound/RunMutationSession.js";
+import type { CachePort } from "../ports/outbound/CachePort.js";
 import type { MutatorEnginePort } from "../ports/outbound/MutatorEnginePort.js";
 import type { ReportPort } from "../ports/outbound/ReportPort.js";
 import type { SourceLocatorPort } from "../ports/outbound/SourceLocatorPort.js";
@@ -34,6 +35,8 @@ export interface RunMutationSessionDeps {
   readonly sourceLocator: SourceLocatorPort;
   readonly files: WorkspaceFilesPort;
   readonly report: ReportPort;
+  /** Opt-in mutant status cache (`--cache`). */
+  readonly cache?: CachePort;
 }
 
 const EXIT_OK = 0;
@@ -41,6 +44,8 @@ const EXIT_REFUSE = 2;
 
 const OUTER_TIMER_PADDING_MS = 2000;
 const OUTER_TIMER_FLOOR_MS = 7000;
+/** Adapter stamps the on-disk schema; satisfies CachedMutantStatus at the port. */
+const CACHE_ENTRY_SCHEMA_PLACEHOLDER = 0;
 
 const BASELINE_FAILED_FALLBACK = "Baseline failed";
 
@@ -77,7 +82,7 @@ export class RunMutationSessionUseCase implements RunMutationSession {
           exitCode: EXIT_OK,
           message: NO_FILES_TO_MUTATE_MESSAGE,
         },
-        input.jsonPath,
+        artifactPaths(input),
       );
     }
 
@@ -92,7 +97,7 @@ export class RunMutationSessionUseCase implements RunMutationSession {
             exitCode: EXIT_REFUSE,
             message: error.message,
           },
-          input.jsonPath,
+          artifactPaths(input),
         );
       }
       throw error;
@@ -122,7 +127,7 @@ export class RunMutationSessionUseCase implements RunMutationSession {
           exitCode: EXIT_REFUSE,
           message: baseline.output ?? BASELINE_FAILED_FALLBACK,
         },
-        input.jsonPath,
+        artifactPaths(input),
       );
     }
 
@@ -136,11 +141,23 @@ export class RunMutationSessionUseCase implements RunMutationSession {
       this.deps.testRunner.getTestTimeoutMs(),
     );
 
+    const cache =
+      input.cache === true && this.deps.cache != null ? this.deps.cache : undefined;
+    if (cache != null) {
+      await cache.load();
+    }
+
     const statuses = await this.scoreDiscovered(
       discovered,
       outerTimeoutMs,
       workers,
+      cache,
     );
+
+    if (cache != null) {
+      await cache.flush();
+    }
+
     return this.reportResult(
       {
         statuses,
@@ -158,8 +175,7 @@ export class RunMutationSessionUseCase implements RunMutationSession {
               )
             : undefined,
       },
-      input.jsonPath,
-      input.sarifPath,
+      artifactPaths(input),
     );
   }
 
@@ -167,6 +183,7 @@ export class RunMutationSessionUseCase implements RunMutationSession {
     discovered: readonly DiscoveredFile[],
     outerTimeoutMs: number,
     workers: number,
+    cache: CachePort | undefined,
   ): Promise<Mutant[]> {
     const total = countAllSites(discovered);
     this.deps.report.writeSessionStart?.({
@@ -176,38 +193,43 @@ export class RunMutationSessionUseCase implements RunMutationSession {
     });
 
     if (workers >= 2) {
-      return this.scoreDiscoveredConcurrent(discovered, total, workers);
+      return this.scoreDiscoveredConcurrent(discovered, total, workers, cache);
     }
-    return this.scoreDiscoveredSequential(discovered, total, outerTimeoutMs);
+    return this.scoreDiscoveredSequential(
+      discovered,
+      total,
+      outerTimeoutMs,
+      cache,
+    );
   }
 
   private async scoreDiscoveredSequential(
     discovered: readonly DiscoveredFile[],
     total: number,
     outerTimeoutMs: number,
+    cache: CachePort | undefined,
   ): Promise<Mutant[]> {
     const statuses: Mutant[] = [];
     const counts = emptyBuckets();
 
     for (const entry of discovered) {
-      if (entry.related.length === 0) {
-        for (const site of entry.sites) {
-          this.pushScored(
-            statuses,
-            counts,
-            total,
-            { site, status: "NoCoverage" },
-          );
-        }
-        continue;
-      }
       for (const site of entry.sites) {
-        const scored = await this.scoreOneMutantInProcess(
-          entry.file,
-          entry.originalSource,
+        const scored = await this.scoreSiteWithCache(
           site,
           entry.related,
-          outerTimeoutMs,
+          cache,
+          async () => {
+            if (entry.related.length === 0) {
+              return { site, status: "NoCoverage" };
+            }
+            return this.scoreOneMutantInProcess(
+              entry.file,
+              entry.originalSource,
+              site,
+              entry.related,
+              outerTimeoutMs,
+            );
+          },
         );
         this.pushScored(statuses, counts, total, scored);
       }
@@ -223,6 +245,7 @@ export class RunMutationSessionUseCase implements RunMutationSession {
     discovered: readonly DiscoveredFile[],
     total: number,
     workers: number,
+    cache: CachePort | undefined,
   ): Promise<Mutant[]> {
     const statuses: Mutant[] = new Array(total);
     const counts = emptyBuckets();
@@ -252,17 +275,22 @@ export class RunMutationSessionUseCase implements RunMutationSession {
     }
 
     const runJob = async (job: Job): Promise<void> => {
-      let scored: Mutant;
-      if (job.related.length === 0) {
-        scored = { site: job.site, status: "NoCoverage" };
-      } else {
-        scored = await this.scoreOneMutantPooled(
-          job.file,
-          job.originalSource,
-          job.site,
-          job.related,
-        );
-      }
+      const scored = await this.scoreSiteWithCache(
+        job.site,
+        job.related,
+        cache,
+        async () => {
+          if (job.related.length === 0) {
+            return { site: job.site, status: "NoCoverage" };
+          }
+          return this.scoreOneMutantPooled(
+            job.file,
+            job.originalSource,
+            job.site,
+            job.related,
+          );
+        },
+      );
       statuses[job.slot] = scored;
       bumpBucket(counts, scored.status);
       // Progress index is completion order for streaming UX.
@@ -276,6 +304,65 @@ export class RunMutationSessionUseCase implements RunMutationSession {
 
     await runPromisePool(jobs, workers, runJob);
     return statuses;
+  }
+
+  /**
+   * Cache hit → reuse status (skip scoring). Miss → score then set.
+   * NoCoverage is cacheable (empty relatedContents).
+   */
+  private async scoreSiteWithCache(
+    site: Site,
+    related: readonly string[],
+    cache: CachePort | undefined,
+    scoreMiss: () => Promise<Mutant>,
+  ): Promise<Mutant> {
+    if (cache == null) {
+      return scoreMiss();
+    }
+
+    const relatedContents = await this.readRelatedContents(related);
+    const key = cache.keyFor({
+      file: site.file,
+      startOffset: site.startOffset,
+      endOffset: site.endOffset,
+      mutatorName: site.mutatorName,
+      replacement: site.replacement,
+      relatedContents,
+    });
+
+    const hit = cache.get(key);
+    if (hit != null) {
+      return {
+        site,
+        status: hit.status,
+        ...(hit.killedBy != null ? { killedBy: hit.killedBy } : {}),
+      };
+    }
+
+    const scored = await scoreMiss();
+    cache.set(key, {
+      status: scored.status,
+      ...(scored.killedBy != null ? { killedBy: scored.killedBy } : {}),
+      schemaVersion: CACHE_ENTRY_SCHEMA_PLACEHOLDER,
+    });
+    return scored;
+  }
+
+  private async readRelatedContents(
+    related: readonly string[],
+  ): Promise<string> {
+    if (related.length === 0) {
+      return "";
+    }
+    const parts: string[] = [];
+    for (const spec of related) {
+      try {
+        parts.push(await this.deps.files.readUtf8(spec));
+      } catch {
+        parts.push("");
+      }
+    }
+    return parts.join("\0");
   }
 
   private pushScored(
@@ -438,7 +525,7 @@ export class RunMutationSessionUseCase implements RunMutationSession {
           exitCode: EXIT_REFUSE,
           message: error.message,
         },
-        jsonPath,
+        { jsonPath },
       );
     }
     if (error instanceof EmptyMutateMatchError) {
@@ -448,7 +535,7 @@ export class RunMutationSessionUseCase implements RunMutationSession {
           exitCode: EXIT_REFUSE,
           message: error.message,
         },
-        jsonPath,
+        { jsonPath },
       );
     }
     throw error;
@@ -456,18 +543,34 @@ export class RunMutationSessionUseCase implements RunMutationSession {
 
   private async reportResult(
     result: SessionResult,
-    jsonPath?: string,
-    sarifPath?: string,
+    artifacts: ReportArtifacts = {},
   ): Promise<SessionResult> {
     await this.deps.report.writeTerminal(result);
-    if (jsonPath != null && this.deps.report.writeJson) {
-      await this.deps.report.writeJson(jsonPath, result);
+    if (artifacts.jsonPath != null && this.deps.report.writeJson) {
+      await this.deps.report.writeJson(artifacts.jsonPath, result);
     }
-    if (sarifPath != null && this.deps.report.writeSarif) {
-      await this.deps.report.writeSarif(sarifPath, result);
+    if (artifacts.sarifPath != null && this.deps.report.writeSarif) {
+      await this.deps.report.writeSarif(artifacts.sarifPath, result);
+    }
+    if (artifacts.htmlPath != null && this.deps.report.writeHtml) {
+      await this.deps.report.writeHtml(artifacts.htmlPath, result);
     }
     return result;
   }
+}
+
+interface ReportArtifacts {
+  readonly jsonPath?: string;
+  readonly sarifPath?: string;
+  readonly htmlPath?: string;
+}
+
+function artifactPaths(input: MutationSessionInput): ReportArtifacts {
+  return {
+    jsonPath: input.jsonPath,
+    sarifPath: input.sarifPath,
+    htmlPath: input.htmlPath,
+  };
 }
 
 interface DiscoveredFile {

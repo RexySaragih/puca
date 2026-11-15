@@ -16,10 +16,10 @@ flowchart LR
 
 1. **Hexagon stays clean.** `src/domain` and `src/application` must not import `vitest`, `vite`, napi bindings, or `node:child_process`. Verify with `npm run lint:deps`.
 2. **Composition root is sacred.** Wire prod vs fakes only in `src/composition/createRuntime.ts`. Do not invent parallel adapter names (`ExecGitAdapter`, `NapiOxcMutator`, `VitestRunnerAdapter`, `SchemaJsonReporter`).
-3. **Mutants never touch disk.** Only `--json` may write. RAM plugin + `invalidateFile` after every mutant (R1).
-4. **A6 targeting lock** — idle empty git-dirty → exit **0**; empty `--mutate` → **2**; not-a-git without `--mutate` → **2** with the exact stderr string.
+3. **Mutants never touch disk.** Intentional writes only: `--json`, `--sarif`, `--html`, and opt-in `--cache` (`.puca/cache.json` metadata). RAM inject + invalidate after every mutant (R1). Never store mutated source in cache.
+4. **A6 targeting lock** — idle empty git-dirty → exit **0**; empty `--mutate` → **2**; not-a-git without `--mutate` → **2** with the exact stderr string. No-flag defaults stay Phase 1–3.3 (SC-346).
 5. **Behavioral tests** — name by behavior (`when … / should …`), mock I/O boundaries only, prefer Given/When/Then. Prefer extending `test/*.test.ts` over 1:1 class mirrors.
-6. **Do not hand-edit Planora lane status** when Planora MCP is connected — use `move_card` / `update_card` with path `.planora/puca-phase-1-1794671137.planora.md`.
+6. **Do not hand-edit Planora lane status** when Planora MCP is connected — use `move_card` / `update_card` with the active board path (Phase 3.4: `.planora/puca-phase-3-4-1794712087.planora.md`).
 
 ```mermaid
 flowchart BT
@@ -64,11 +64,14 @@ flowchart LR
 | --- | --- |
 | Domain types / statuses | `src/domain/` |
 | Session orchestration / CI exit gates | `src/application/use-cases/RunMutationSessionUseCase.ts`, `src/application/evaluateQualityGates.ts` |
-| Ports | `src/application/ports/` (`ReportPort.writeSarif?` additive) |
+| Ports | `src/application/ports/` (`ReportPort.writeSarif?` / `writeHtml?`; `CachePort`; `WorkspaceDiscoveryPort`) |
 | CLI flags / exit process | `src/adapters/inbound/cli/`, `src/cli.ts` |
 | Git targeting / excludes | `src/adapters/outbound/git/`, `src/domain/excludes.ts` |
 | Vitest session / RAM / map | `src/adapters/outbound/vitest/` |
-| Reports / File Summary / SARIF | `src/adapters/outbound/report/` (`StdioReport`, `formatFileSummaryTable`, `SarifFile`) |
+| Jest single-worker runner | `src/adapters/outbound/jest/JestTestRunner.ts`, `src/composition/createRuntime.ts` |
+| Reports / File Summary / SARIF / HTML | `src/adapters/outbound/report/` (`StdioReport`, `formatFileSummaryTable`, `SarifFile`, `HtmlFile`) |
+| Opt-in disk cache | `src/adapters/outbound/cache/FileHashCache.ts`, `src/application/ports/outbound/CachePort.ts` |
+| Workspace discovery / sequential sessions | `src/adapters/outbound/workspace/NodeWorkspaceDiscovery.ts`, `src/application/WorkspaceTargetResolver.ts` |
 | Operators / disable / apply / TemplateLiteral skip | `crates/puca-core/src/` (`operators/mod.rs` `visit_template_literal`) |
 | NAPI surface | `crates/puca-binding/`, `src/adapters/outbound/napi/` |
 | Fixture oracle | `fixtures/loop/`, `test/e2e.loopFixture.test.ts` |
@@ -98,13 +101,22 @@ After changing Rust operators or NAPI: `npm run build` before `npm test -- napiM
 
 ---
 
+## Parser / mutator constraints (puca-core)
+
+- Operators live under `crates/puca-core/src/operators/`; discovery uses oxc `Visit`.
+- Sites are UTF-8 **byte offsets** into the original source; `apply` is a splice, never AST reprint.
+- **TemplateLiteral** expressions are skipped (`visit_template_literal` must not call `walk_template_literal`).
+- Disable comments are Púca-only (`// puca-disable-next-line`, `// puca-disable`); ignore Stryker directives.
+- After Rust/NAPI changes: `npm run build` then `cargo test -p puca-core` and relevant TS tests.
+
 ## Patterns to prefer
 
 - **Vertical tickets** — one observable outcome; keep Files disjoint when claiming Parallel.
-- **Fail closed** — missing Vitest / NAPI / Browser Mode / red baseline → exit 2.
+- **Fail closed** — missing Vitest / Jest / NAPI / Browser Mode / red baseline / bad flags → exit 2.
 - **Apply from original bytes** every mutant — never from the previous mutant string.
 - **Timeout path** — mark Timeout, respawn session, continue to next mutant (no retry of the hung one).
-- **Exit priority** — any RuntimeError → 2, else any Survived → 1, else 0.
+- **Exit priority** — RuntimeError/refuse → 2; else Survived or failing opt-in gates → 1; else 0.
+- **Distribution lock (Phase 3)** — GitHub Release tarballs only; never add `@stryker-mutator/*`, npm publish, OIDC publish, or git `optionalDependencies`.
 
 ```mermaid
 flowchart TD
@@ -121,12 +133,13 @@ flowchart TD
 ## Patterns to avoid
 
 - Writing mutant sources under `.puca-tmp`, `.stryker-tmp`, or copying fixtures “for isolation”
-- Bundling Vitest into the `puca` package (resolve from project `cwd`)
+- Bundling Vitest/Jest into the `puca` package (resolve from project `cwd`)
 - Mutating test/spec files, configs, `.d.ts`, or `node_modules` / `dist`
 - Honoring Stryker disable comments (Púca-only disable lines)
-- Expanding into Jest, Browser Mode, CJS, SFC, or `puca.config.ts` without an explicit product decision
-- Publishing to the npm registry or adding git `optionalDependencies` on unpublished `puca-<abi>` names (Phase 3.1 ships GitHub Release tarballs only)
-- Adding UI layers — terminal contract is enough (UX-001)
+- Adding `@stryker-mutator/*` or `mutation-testing-elements` (HTML is native `HtmlFile` only)
+- Expanding into Jest multi-worker pools, Browser Mode, CJS, SFC, or `puca.config.ts` without an explicit product decision
+- Publishing to the npm registry or adding git `optionalDependencies` on unpublished `puca-<abi>` names (Phase 3 ships GitHub Release tarballs only; npm publish = Phase 4 / ADR-038)
+- Treating always-on cache or CDN HTML as defaults (both stay opt-in / offline)
 
 ---
 

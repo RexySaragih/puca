@@ -12,6 +12,7 @@ export class RecordingReport implements ReportPort {
   readonly terminalResults: SessionResult[] = [];
   readonly jsonWrites: Array<{ path: string; schemaDoc: unknown }> = [];
   readonly sarifWrites: Array<{ path: string; result: SessionResult }> = [];
+  readonly htmlWrites: Array<{ path: string; result: SessionResult }> = [];
   readonly notices: string[] = [];
   readonly sessionStarts: SessionStartInfo[] = [];
   readonly mutantResults: Array<{ mutant: Mutant; progress: MutantProgress }> =
@@ -39,5 +40,9 @@ export class RecordingReport implements ReportPort {
 
   async writeSarif(path: string, result: SessionResult): Promise<void> {
     this.sarifWrites.push({ path, result });
+  }
+
+  async writeHtml(path: string, result: SessionResult): Promise<void> {
+    this.htmlWrites.push({ path, result });
   }
 }

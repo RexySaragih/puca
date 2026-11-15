@@ -10,6 +10,8 @@ export interface ReportPort {
   writeJson?(path: string, result: SessionResult): Promise<void>;
   /** Write Survived-only SARIF 2.1.0 when `--sarif` is set (ADR-033). */
   writeSarif?(path: string, result: SessionResult): Promise<void>;
+  /** Write self-contained offline HTML when `--html` is set (ADR-034). */
+  writeHtml?(path: string, result: SessionResult): Promise<void>;
   /** Immediate stderr line (untracked notice, --verbose). */
   writeNotice?(line: string): void;
   /** Banner before the mutant loop (file/mutant counts). */

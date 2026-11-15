@@ -88,6 +88,10 @@ describe("CLI terminal report and exit codes", () => {
         breakOnScore: undefined,
         failOnNoCoverage: false,
         sarifPath: undefined,
+        htmlPath: undefined,
+        cache: false,
+        workspaceGlob: undefined,
+        runner: "vitest",
       });
     });
 
@@ -102,6 +106,10 @@ describe("CLI terminal report and exit codes", () => {
         breakOnScore: undefined,
         failOnNoCoverage: false,
         sarifPath: undefined,
+        htmlPath: undefined,
+        cache: false,
+        workspaceGlob: undefined,
+        runner: "vitest",
       });
     });
 
@@ -116,6 +124,10 @@ describe("CLI terminal report and exit codes", () => {
         breakOnScore: undefined,
         failOnNoCoverage: false,
         sarifPath: undefined,
+        htmlPath: undefined,
+        cache: false,
+        workspaceGlob: undefined,
+        runner: "vitest",
       });
     });
 
@@ -147,11 +159,21 @@ describe("CLI terminal report and exit codes", () => {
         breakOnScore: 80,
         failOnNoCoverage: true,
         sarifPath: "out.sarif",
+        htmlPath: undefined,
+        cache: false,
+        workspaceGlob: undefined,
+        runner: "vitest",
       });
       expect(parseArgs([]).breakOnScore).toBeUndefined();
       expect(parseArgs([]).failOnNoCoverage).toBe(false);
       expect(parseArgs([]).sarifPath).toBeUndefined();
+      expect(parseArgs([]).htmlPath).toBeUndefined();
+      expect(parseArgs([]).cache).toBe(false);
+      expect(parseArgs([]).runner).toBe("vitest");
       expect(parseArgs(["--fail-on-no-coverage"]).failOnNoCoverage).toBe(true);
+      expect(parseArgs(["--cache"]).cache).toBe(true);
+      expect(parseArgs(["--html", "r.html"]).htmlPath).toBe("r.html");
+      expect(parseArgs(["--runner", "jest"]).runner).toBe("jest");
     });
 
     it("should refuse unknown non-flags (SC-327)", () => {
@@ -1043,10 +1065,143 @@ describe("SARIF report (SC-336 / ADR-033)", () => {
       "utf8",
     );
     expect(source).toMatch(/writeSarif\?/);
+    expect(source).toMatch(/writeHtml\?/);
     expect(source).toMatch(/writeTerminal/);
     expect(source).toMatch(/writeJson\?/);
     expect(source).toMatch(/writeNotice\?/);
     expect(source).toMatch(/writeSessionStart\?/);
     expect(source).toMatch(/writeMutantResult\?/);
+  });
+});
+
+describe("HTML report (SC-341 / ADR-034)", () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "puca-html-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("should refuse missing or empty --html path (SC-345)", async () => {
+    const { runCli } = await import("../src/cli.js");
+    for (const argv of [["--html"], ["--html="], ["--html", ""]]) {
+      let stderr = "";
+      const prevWrite = process.stderr.write.bind(process.stderr);
+      process.stderr.write = ((chunk: string | Uint8Array) => {
+        stderr += String(chunk);
+        return true;
+      }) as typeof process.stderr.write;
+      try {
+        const code = await runCli({ argv, cwd: repoRoot });
+        expect(code, argv.join(" ")).toBe(2);
+        expect(stderr).toContain("--html");
+      } finally {
+        process.stderr.write = prevWrite;
+      }
+    }
+  });
+
+  it("should write a self-contained HTML file with filters and diffs", async () => {
+    const source = toAbsolutePath(path.join(tempDir, "src/a.ts"));
+    const files = new InMemoryFiles(tempDir);
+    const mutator = new FakeMutatorEngine();
+    const testRunner = new FakeTestRunner();
+    const sourceLocator = new InMemorySourceLocator();
+    const { HtmlFile } = await import(
+      "../src/adapters/outbound/report/HtmlFile.js"
+    );
+    const html = new HtmlFile(tempDir);
+    const recording = new RecordingReport();
+    const report: ReportPort = {
+      writeTerminal: (r) => recording.writeTerminal(r),
+      writeHtml: (p, r) => html.writeHtml(p, r),
+    };
+    const site = siteFor(tempDir, source, 1, "ArithmeticOperator", "+", "-");
+    sourceLocator.setCandidates([source]);
+    files.seed(source, "a+b");
+    mutator.setSites(source, [site]);
+    const spec = toAbsolutePath(path.join(tempDir, "test/a.test.ts"));
+    testRunner.setAllSpecs([spec]);
+    testRunner.setStaticImports({ [spec]: [source] });
+    testRunner.baselineResult = { ok: true };
+    testRunner.relatedResult = { kind: "passed" };
+
+    const useCase = new RunMutationSessionUseCase({
+      mutator,
+      testRunner,
+      sourceLocator,
+      files,
+      report,
+    });
+    const htmlPath = path.join(tempDir, "report.html");
+    await useCase.execute({ cwd: tempDir, htmlPath });
+
+    const text = await fs.readFile(htmlPath, "utf8");
+    expect(text).toContain("<style>");
+    expect(text).toContain("<script>");
+    expect(text).toContain("puca-session");
+    expect(text).toContain("ArithmeticOperator");
+    expect(text).toContain("Survived");
+    expect(text).toContain('id="filters"');
+    expect(text).toMatch(/class="diff"/);
+    expect(text).not.toMatch(/https?:\/\/[^"'\s]+/);
+    expect(text).not.toMatch(/@stryker-mutator\//);
+  });
+
+  it("should write html+json+sarif together while keeping terminal summary", async () => {
+    const source = toAbsolutePath(path.join(tempDir, "src/a.ts"));
+    const files = new InMemoryFiles(tempDir);
+    files.seed(source, "a+b");
+    const mutator = new FakeMutatorEngine();
+    const testRunner = new FakeTestRunner();
+    const sourceLocator = new InMemorySourceLocator();
+    const { HtmlFile } = await import(
+      "../src/adapters/outbound/report/HtmlFile.js"
+    );
+    const { SchemaJsonFile } = await import(
+      "../src/adapters/outbound/report/SchemaJsonFile.js"
+    );
+    const { SarifFile } = await import(
+      "../src/adapters/outbound/report/SarifFile.js"
+    );
+    const out = captureStream();
+    const stdio = new StdioReport({ cwd: tempDir, stdout: out.stream });
+    const report: ReportPort = {
+      writeTerminal: (r) => stdio.writeTerminal(r),
+      writeJson: (p, r) => new SchemaJsonFile(files, tempDir).writeJson(p, r),
+      writeSarif: (p, r) => new SarifFile(tempDir).writeSarif(p, r),
+      writeHtml: (p, r) => new HtmlFile(tempDir).writeHtml(p, r),
+    };
+    const site = siteFor(tempDir, source, 1, "ArithmeticOperator", "+", "-");
+    sourceLocator.setCandidates([source]);
+    mutator.setSites(source, [site]);
+    const spec = toAbsolutePath(path.join(tempDir, "test/a.test.ts"));
+    testRunner.setAllSpecs([spec]);
+    testRunner.setStaticImports({ [spec]: [source] });
+    testRunner.baselineResult = { ok: true };
+    testRunner.relatedResult = { kind: "passed" };
+
+    const useCase = new RunMutationSessionUseCase({
+      mutator,
+      testRunner,
+      sourceLocator,
+      files,
+      report,
+    });
+
+    await useCase.execute({
+      cwd: tempDir,
+      htmlPath: path.join(tempDir, "r.html"),
+      jsonPath: path.join(tempDir, "r.json"),
+      sarifPath: path.join(tempDir, "r.sarif"),
+    });
+
+    await fs.access(path.join(tempDir, "r.html"));
+    await fs.access(path.join(tempDir, "r.json"));
+    await fs.access(path.join(tempDir, "r.sarif"));
+    expect(out.text()).toContain("── Summary ──");
   });
 });

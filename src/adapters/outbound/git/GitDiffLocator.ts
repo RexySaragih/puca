@@ -11,7 +11,8 @@ import {
   NotAGitRepositoryError,
 } from "../../../domain/targetingErrors.js";
 
-const TS_SOURCE_EXT = /\.tsx?$/;
+/** Eligible mutate/git sources: TS (default Vitest path) and JS (Jest fixtures). */
+const SOURCE_EXT = /\.([cm]?[jt]sx?)$/;
 const SKIP_WALK_DIRS = new Set(["node_modules", "dist"]);
 
 export type GitSpawn = (
@@ -21,7 +22,7 @@ export type GitSpawn = (
 ) => ChildProcess;
 
 /**
- * Prod SourceLocatorPort: git dirty `.ts`/`.tsx` under cwd, or --mutate glob.
+ * Prod SourceLocatorPort: git dirty `.ts`/`.tsx`/`.js` under cwd, or --mutate glob.
  * Untracked files are ignored unless includeUntracked. Hard excludes are never returned.
  */
 export class GitDiffLocator implements SourceLocatorPort {
@@ -48,8 +49,8 @@ export class GitDiffLocator implements SourceLocatorPort {
     cwd: string,
     mutateGlob: string,
   ): Promise<readonly AbsolutePath[]> {
-    const relativeTsFiles = await listRelativeTsFiles(cwd);
-    const matched = micromatch(relativeTsFiles, mutateGlob);
+    const relativeSourceFiles = await listRelativeSourceFiles(cwd);
+    const matched = micromatch(relativeSourceFiles, mutateGlob);
     const eligible = this.filterEligible(cwd, matched);
 
     if (eligible.length === 0) {
@@ -86,7 +87,7 @@ export class GitDiffLocator implements SourceLocatorPort {
 
     for (const relativePath of relativePaths) {
       const normalized = relativePath.replaceAll("\\", "/");
-      if (!TS_SOURCE_EXT.test(normalized)) {
+      if (!SOURCE_EXT.test(normalized)) {
         continue;
       }
       if (isHardExcluded(normalized)) {
@@ -156,7 +157,7 @@ function uniquePaths(paths: readonly string[]): string[] {
   return [...new Set(paths.map((entry) => entry.replaceAll("\\", "/")))];
 }
 
-async function listRelativeTsFiles(cwd: string): Promise<string[]> {
+async function listRelativeSourceFiles(cwd: string): Promise<string[]> {
   const root = path.resolve(cwd);
   const results: string[] = [];
 
@@ -177,7 +178,7 @@ async function listRelativeTsFiles(cwd: string): Promise<string[]> {
         await walk(absolute);
         continue;
       }
-      if (!entry.isFile() || !TS_SOURCE_EXT.test(entry.name)) {
+      if (!entry.isFile() || !SOURCE_EXT.test(entry.name)) {
         continue;
       }
       results.push(path.relative(root, absolute).replaceAll("\\", "/"));

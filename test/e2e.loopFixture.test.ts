@@ -521,22 +521,18 @@ async function walkForbiddenArtifacts(
       }
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        if (
-          entry.name === ".puca-tmp" ||
-          entry.name === ".stryker-tmp" ||
-          entry.name === ".puca"
-        ) {
+        // ADR-035: `.puca/` cache is an intentional write — only sandbox dirs are forbidden.
+        if (entry.name === ".puca-tmp" || entry.name === ".stryker-tmp") {
           hits.push(full);
+          continue;
+        }
+        if (entry.name === ".puca") {
           continue;
         }
         await walk(full);
         continue;
       }
       if (!entry.isFile()) {
-        continue;
-      }
-      if (entry.name === "cache.json" && dir.endsWith(`${path.sep}.puca`)) {
-        hits.push(full);
         continue;
       }
       // Mutated copies of fixture src would differ from the pristine originals.
