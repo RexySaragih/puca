@@ -90,7 +90,7 @@ flowchart TD
 
 | Capability | Behavior |
 | --- | --- |
-| Targeting | Default: git dirty `.ts`/`.tsx` vs HEAD (untracked ignored; stderr skip notice). `--include-untracked` adds untracked files. Override: `--mutate <glob>` (tree walk). Hard excludes never mutate. |
+| Targeting | Default: git dirty `.ts`/`.tsx`/`.js`/`.jsx`/`.mjs`/`.cjs` vs HEAD (untracked ignored; stderr skip notice). `--include-untracked` adds untracked files. Override: `--mutate <glob>` (tree walk). Hard excludes never mutate. |
 | Mutator | Oxc (Rust) via NAPI: arithmetic, equality, boolean, logical, conditional predicates. Lazy byte-offset apply. Phase 3.2: expressions inside any `TemplateLiteral` (`${…}`, tagged or untagged) are never mutated — no opt-in flag. |
 | Disable | `// puca-disable-next-line`, `// puca-disable` |
 | Session | One Vitest keep-alive by default (`--workers 1` / omit). Vite RAM plugin; sequential mutants; outer timeout + respawn. `--workers N` (N≥2) opts into a fork pool of isolated keep-alives (Phase 2). `--verbose` lists files, mutators, disable omissions, respawns/recycles. |
@@ -105,7 +105,7 @@ flowchart TD
 
 | Flag | Kind | Default |
 | --- | --- | --- |
-| `--mutate <glob>` | path glob | git dirty `.ts`/`.tsx` |
+| `--mutate <glob>` | path glob | git dirty `.ts`/`.tsx`/`.js`/`.jsx`/`.mjs`/`.cjs` |
 | `--include-untracked` | switch | off |
 | `--timeout <ms>` | int > 0 | `max(testTimeout+2000, 7000)` |
 | `--workers <n>` | int ≥ 1 | `1` |

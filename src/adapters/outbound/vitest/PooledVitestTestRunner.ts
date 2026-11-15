@@ -61,6 +61,8 @@ export class PooledVitestTestRunner implements TestRunnerPort {
   private waitQueue: Array<() => void> = [];
   private closed = false;
   private outerTimeoutMs = 7000;
+  /** Project Vitest testTimeout captured from the coordinator before it closes. */
+  private projectTestTimeoutMs: number | null = null;
   private _recycleCount = 0;
 
   constructor(options: PooledVitestTestRunnerOptions) {
@@ -107,6 +109,8 @@ export class PooledVitestTestRunner implements TestRunnerPort {
       await this.closeCoordinatorOnly();
       return result;
     }
+    // Capture project testTimeout before ADR-014 closes the coordinator.
+    this.projectTestTimeoutMs = coordinator.getTestTimeoutMs();
     // ADR-014: close coordinator, then spawn N scoring children.
     await this.closeCoordinatorOnly();
     this.spawnPool();
@@ -122,7 +126,11 @@ export class PooledVitestTestRunner implements TestRunnerPort {
   }
 
   getTestTimeoutMs(): number {
-    return this.outerTimeoutMs;
+    return this.projectTestTimeoutMs ?? this.outerTimeoutMs;
+  }
+
+  configureOuterTimeoutMs(timeoutMs: number): void {
+    this.outerTimeoutMs = timeoutMs;
   }
 
   async runRelated(mutant: MutantRunRequest): Promise<RelatedRunResult> {

@@ -182,6 +182,10 @@ describe("CLI terminal report and exit codes", () => {
       );
       expect(() => parseArgs(["--file-summary"])).toThrow(/Unknown argument/);
       expect(() => parseArgs(["--report", "html"])).toThrow(/Unknown argument/);
+      expect(() => parseArgs(["--mutate="])).toThrow(/Invalid value for --mutate/);
+      expect(() => parseArgs(["--mutate", ""])).toThrow(
+        /Invalid value for --mutate|Missing value for --mutate/,
+      );
     });
 
     it("should refuse invalid --break-on-score (SC-331)", async () => {
@@ -754,7 +758,10 @@ describe("CLI terminal report and exit codes", () => {
       expect(raw.files["src/add.ts"]?.language).toBe("typescript");
       expect(raw.files["src/add.ts"]?.source).toBe(sourceText);
 
-      const mutants = raw.files["src/add.ts"]!.mutants;
+      const mutants = raw.files["src/add.ts"]!.mutants as Array<{
+        id: string;
+        status: string;
+      }>;
       const ids = mutants.map((m) => m.id);
       expect(ids).toEqual([...ids].sort((a, b) => a.localeCompare(b)));
       expect(mutants.map((m) => m.status)).toEqual(

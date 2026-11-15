@@ -8,6 +8,7 @@ import { isHardExcluded } from "../../../domain/excludes.js";
 import { toAbsolutePath, type AbsolutePath } from "../../../domain/mutant.js";
 import {
   EmptyMutateMatchError,
+  GitCommandFailedError,
   NotAGitRepositoryError,
 } from "../../../domain/targetingErrors.js";
 
@@ -22,8 +23,8 @@ export type GitSpawn = (
 ) => ChildProcess;
 
 /**
- * Prod SourceLocatorPort: git dirty `.ts`/`.tsx`/`.js` under cwd, or --mutate glob.
- * Untracked files are ignored unless includeUntracked. Hard excludes are never returned.
+ * Prod SourceLocatorPort: git dirty TS/JS sources under cwd, or --mutate glob.
+ * Extensions: .ts/.tsx/.js/.jsx/.mjs/.cjs. Untracked ignored unless includeUntracked.
  */
 export class GitDiffLocator implements SourceLocatorPort {
   untrackedSkipped = 0;
@@ -39,7 +40,10 @@ export class GitDiffLocator implements SourceLocatorPort {
     includeUntracked?: boolean,
   ): Promise<readonly AbsolutePath[]> {
     this.untrackedSkipped = 0;
-    if (mutateGlob !== undefined && mutateGlob.length > 0) {
+    if (mutateGlob !== undefined) {
+      if (mutateGlob.trim() === "") {
+        throw new EmptyMutateMatchError(mutateGlob);
+      }
       return this.candidatesFromMutateGlob(cwd, mutateGlob);
     }
     return this.candidatesFromGitDiff(cwd, includeUntracked === true);
@@ -122,7 +126,9 @@ export class GitDiffLocator implements SourceLocatorPort {
         stderr += chunk;
       });
       child.on("error", (error) => {
-        reject(error);
+        const detail =
+          error instanceof Error ? error.message : String(error);
+        reject(new GitCommandFailedError(detail));
       });
       child.on("close", (code) => {
         if (code === 0) {
@@ -136,11 +142,11 @@ export class GitDiffLocator implements SourceLocatorPort {
           return;
         }
 
-        reject(
-          new Error(
-            `git ${args.join(" ")} failed (exit ${String(code)}): ${stderr.trim()}`,
-          ),
-        );
+        const detail =
+          stderr.trim().length > 0
+            ? `git ${args.join(" ")} failed (exit ${String(code)}): ${stderr.trim()}`
+            : `git ${args.join(" ")} failed (exit ${String(code)})`;
+        reject(new GitCommandFailedError(detail));
       });
     });
   }

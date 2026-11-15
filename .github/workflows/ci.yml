@@ -25,6 +25,12 @@ jobs:
         run: npm ci
       - name: Build TypeScript + NAPI
         run: npm run build
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Lint dependency boundaries
+        run: npm run lint:deps
+      - name: Rust mutator tests
+        run: cargo test -p puca-core
       - name: Test
         run: npm test
 

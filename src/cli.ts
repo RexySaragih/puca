@@ -122,6 +122,10 @@ async function runWorkspaceCli(
 
   try {
     const result = await resolver.execute(sessionInput);
+    // R4-M3: aggregate footer — per-package terminal/JSON already used each package cwd.
+    if (result.message != null && result.message.length > 0) {
+      process.stderr.write(`${result.message}\n`);
+    }
     return result.exitCode;
   } catch (error) {
     if (error instanceof EmptyWorkspaceMatchError) {

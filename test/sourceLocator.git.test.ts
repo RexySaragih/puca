@@ -7,6 +7,7 @@ import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GitDiffLocator } from "../src/adapters/outbound/git/GitDiffLocator.js";
 import { NodeWorkspaceFiles } from "../src/adapters/outbound/fs/NodeWorkspaceFiles.js";
+import { GitCommandFailedError } from "../src/domain/targetingErrors.js";
 import {
   FakeMutatorEngine,
   FakeTestRunner,
@@ -298,6 +299,38 @@ describe("Git dirty / --mutate source locating", () => {
       for (const options of spawnCalls) {
         expect(options.shell).toBe(false);
       }
+    });
+
+    it("should map non-128 git failures to GitCommandFailedError (R4-M5)", async () => {
+      // Given — git exits 1 (e.g. lock / index error), not "not a repo"
+      const spawnImpl = (
+        _command: string,
+        _args: readonly string[],
+        _options: SpawnOptions,
+      ): ChildProcess => {
+        const child = new EventEmitter() as ChildProcess;
+        const stdout = new PassThrough();
+        const stderr = new PassThrough();
+        child.stdout = stdout;
+        child.stderr = stderr;
+        queueMicrotask(() => {
+          stderr.write("fatal: index.lock exists\n");
+          stdout.end();
+          stderr.end();
+          child.emit("close", 1);
+        });
+        return child;
+      };
+      const files = new NodeWorkspaceFiles(tempDir);
+      const locator = new GitDiffLocator(files, spawnImpl);
+
+      // When / Then
+      await expect(locator.candidateFiles(tempDir)).rejects.toBeInstanceOf(
+        GitCommandFailedError,
+      );
+      await expect(locator.candidateFiles(tempDir)).rejects.toThrow(
+        /Pass --mutate/,
+      );
     });
 
     it("should record shell false on a mocked spawn without invoking git", async () => {

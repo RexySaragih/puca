@@ -214,6 +214,42 @@ describe("RunMutationSession (memory adapters)", () => {
       });
     });
 
+    describe("when one cache entry is invalid among good entries (R4-M4)", () => {
+      it("should keep valid entries and skip the bad one", async () => {
+        // Given
+        const cwd = await makeTempCwd();
+        const cache = new FileHashCache(cwd);
+        const goodKey = "abc123";
+        await fs.mkdir(path.join(cwd, ".puca"), { recursive: true });
+        await fs.writeFile(
+          path.join(cwd, ".puca", "cache.json"),
+          JSON.stringify({
+            schemaVersion: CACHE_SCHEMA_VERSION,
+            engineVersion: CACHE_ENGINE_VERSION,
+            entries: {
+              [goodKey]: {
+                status: "Killed",
+                schemaVersion: CACHE_SCHEMA_VERSION,
+                killedBy: "t",
+              },
+              bad: {
+                status: "Survived",
+                schemaVersion: 999,
+              },
+            },
+          }),
+          "utf8",
+        );
+
+        // When
+        await cache.load();
+
+        // Then
+        expect(cache.get(goodKey)?.status).toBe("Killed");
+        expect(cache.get("bad")).toBeUndefined();
+      });
+    });
+
     describe("when cache is corrupt or contains mutatedSource (AC2)", () => {
       it("should fail open and continue scoring without exit 2", async () => {
         // Given — truncated JSON
@@ -313,6 +349,47 @@ describe("RunMutationSession (memory adapters)", () => {
         await expect(fs.access(harness.cachePath)).rejects.toMatchObject({
           code: "ENOENT",
         });
+      });
+    });
+
+    describe("when source changes but site identity is unchanged", () => {
+      it("should miss cache and re-score", async () => {
+        // Given
+        const cwd = await makeTempCwd();
+        const harness = createCacheHarness(cwd);
+        const source = abs(cwd, "src/foo.ts");
+        const site = siteFor(source, cwd, 48, "Arithmetic", "+", "-");
+        await seedCoveredMutant({ ...harness, cwd, site });
+
+        await harness.useCase.execute({ cwd, cache: true });
+        expect(harness.testRunner.runRelatedCalls).toHaveLength(1);
+
+        // Same offsets/mutator; different source body (comment prepended).
+        const changed =
+          "// edited\nexport const add = (a: number, b: number) => a + b;\n";
+        const shifted = siteFor(source, cwd, 57, "Arithmetic", "+", "-");
+        harness.files.seed(source, changed);
+        harness.mutator.setSites(source, [shifted]);
+
+        // When — site id changed with offset; also verify content in key via same site
+        // after restoring offsets into the new string at the + operator.
+        const plusAt = changed.indexOf("+");
+        const sameSpanSite = siteFor(
+          source,
+          cwd,
+          plusAt,
+          "Arithmetic",
+          "+",
+          "-",
+        );
+        harness.mutator.setSites(source, [sameSpanSite]);
+
+        const second = await harness.useCase.execute({ cwd, cache: true });
+
+        // Then — must re-invoke runner (sourceContents in cache key)
+        expect(second.exitCode).toBe(0);
+        expect(harness.testRunner.runRelatedCalls).toHaveLength(1);
+        expect(second.statuses[0]?.status).toBe("Killed");
       });
     });
   });

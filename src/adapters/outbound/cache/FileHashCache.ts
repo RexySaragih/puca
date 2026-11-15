@@ -11,7 +11,7 @@ import type { MutantStatus } from "../../../domain/mutant.js";
 /** Bump when on-disk entry/document shape is incompatible. */
 export const CACHE_SCHEMA_VERSION = 1;
 /** Bump when key formula or scoring semantics change (wipes prior hits). */
-export const CACHE_ENGINE_VERSION = "1";
+export const CACHE_ENGINE_VERSION = "2";
 
 const CACHE_DIR_NAME = ".puca";
 const CACHE_FILE_NAME = "cache.json";
@@ -50,6 +50,7 @@ export class FileHashCache implements CachePort {
       String(input.endOffset),
       input.mutatorName,
       input.replacement,
+      input.sourceContents,
       input.relatedContents,
     ].join("\0");
     return createHash("sha256").update(composite, "utf8").digest("hex");
@@ -99,19 +100,20 @@ export class FileHashCache implements CachePort {
       return;
     }
 
+    // R4-M4: skip invalid entries; only document-level corruption wipes all.
     const loaded = new Map<string, CachedMutantStatus>();
     for (const [key, value] of Object.entries(parsed.entries)) {
       if (!isPlainObject(value)) {
-        return;
+        continue;
       }
       if ("mutatedSource" in value) {
-        return;
+        continue;
       }
       if (
         value.schemaVersion !== CACHE_SCHEMA_VERSION ||
         !isMutantStatus(value.status)
       ) {
-        return;
+        continue;
       }
       const killedBy =
         typeof value.killedBy === "string" ? value.killedBy : undefined;

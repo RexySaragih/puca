@@ -320,4 +320,43 @@ describe("PooledVitestTestRunner", () => {
       await pool.close();
     });
   });
+
+  describe("when configureOuterTimeoutMs is called after baseline", () => {
+    it("should use the configured timeout for IPC hang kills", async () => {
+      const live: MockChild[] = [];
+      let nextPid = 5000;
+      const forkChild: ForkChildFn = () => {
+        const child = new MockChild(nextPid, () => true);
+        nextPid += 1;
+        live.push(child);
+        return child.asChildProcess();
+      };
+
+      const pool = new PooledVitestTestRunner({
+        workers: 2,
+        forkChild,
+        createCoordinator: () => createFakeCoordinator(),
+        outerTimeoutMs: 10_000,
+      });
+
+      await pool.startSession({ buffers: new Map() });
+      await pool.baseline([]);
+      pool.configureOuterTimeoutMs(40);
+
+      const started = Date.now();
+      const hang = await pool.runRelated({
+        file: toAbsolutePath("/tmp/a.ts"),
+        mutatedSource: "x",
+        relatedSpecs: ["t.ts"],
+        mutantId: "hang",
+      });
+      const elapsed = Date.now() - started;
+
+      expect(hang.kind).toBe("timeout");
+      expect(elapsed).toBeLessThan(2000);
+      expect(pool.recycleCount).toBeGreaterThanOrEqual(1);
+
+      await pool.close();
+    });
+  });
 });

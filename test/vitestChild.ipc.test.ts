@@ -148,7 +148,11 @@ function createStubRunner(
   > = [];
   const stub = {
     setBufferCalls,
-    runRelatedImpl: async () => {
+    runRelatedImpl: async (_mutant: {
+      file: ReturnType<typeof toAbsolutePath>;
+      mutatedSource: string;
+      relatedSpecs: readonly string[];
+    }) => {
       if (result.kind === "failed") {
         return { kind: "failed" as const, failingTestId: result.failingTestId };
       }

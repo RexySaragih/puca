@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import fs from "node:fs";
 import path from "node:path";
 import { PucaRefuseError } from "../vitest/resolveProjectVitest.js";
 
@@ -58,6 +59,90 @@ export function resolveProjectJest(cwd: string): ProjectJest {
   }
 
   return { runCLI: mod.runCLI, resolvedPath };
+}
+
+/**
+ * Read project Jest `testTimeout` (R4-L4 / R4-H1).
+ * Order: package.json `jest` → jest.config.json → optional `jest-config` from
+ * the project cwd (supports jest.config.js/ts/mjs when Jest is installed).
+ * Missing / unreadable → undefined (caller uses default).
+ */
+export async function resolveJestTestTimeoutMs(
+  cwd: string,
+): Promise<number | undefined> {
+  const fromPackage = readTimeoutFromPackageJson(cwd);
+  if (fromPackage != null) {
+    return fromPackage;
+  }
+  const fromJson = readTimeoutFromJestConfigJson(cwd);
+  if (fromJson != null) {
+    return fromJson;
+  }
+  return readTimeoutViaProjectJestConfig(cwd);
+}
+
+function readTimeoutFromPackageJson(cwd: string): number | undefined {
+  try {
+    const raw = fs.readFileSync(path.join(cwd, "package.json"), "utf8");
+    const pkg = JSON.parse(raw) as { jest?: { testTimeout?: unknown } };
+    return asPositiveInt(pkg.jest?.testTimeout);
+  } catch {
+    return undefined;
+  }
+}
+
+function readTimeoutFromJestConfigJson(cwd: string): number | undefined {
+  try {
+    const raw = fs.readFileSync(path.join(cwd, "jest.config.json"), "utf8");
+    const cfg = JSON.parse(raw) as { testTimeout?: unknown };
+    return asPositiveInt(cfg.testTimeout);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Use the consumer project's `jest-config` (transitive via jest) to load
+ * jest.config.js / .ts / .mjs. Never a Púca dependency — fail soft if absent.
+ */
+async function readTimeoutViaProjectJestConfig(
+  cwd: string,
+): Promise<number | undefined> {
+  try {
+    const requireFromCwd = createRequire(path.join(cwd, "package.json"));
+    const mod = requireFromCwd("jest-config") as {
+      readConfig?: (
+        argv: Record<string, unknown>,
+        packageRootOrConfig: string,
+      ) => Promise<{
+        globalConfig?: { testTimeout?: unknown };
+        projectConfig?: { testTimeout?: unknown };
+      }>;
+    };
+    if (typeof mod.readConfig !== "function") {
+      return undefined;
+    }
+    const result = await mod.readConfig({}, cwd);
+    // Jest 29 puts testTimeout on globalConfig (not projectConfig).
+    return (
+      asPositiveInt(result.globalConfig?.testTimeout) ??
+      asPositiveInt(result.projectConfig?.testTimeout)
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+function asPositiveInt(value: unknown): number | undefined {
+  if (
+    typeof value !== "number" ||
+    !Number.isFinite(value) ||
+    !Number.isInteger(value) ||
+    value <= 0
+  ) {
+    return undefined;
+  }
+  return value;
 }
 
 export { PucaRefuseError };

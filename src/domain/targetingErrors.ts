@@ -28,6 +28,20 @@ export class EmptyMutateMatchError extends Error {
 }
 
 /**
+ * Git spawn / non-repo exit failures while resolving dirty files (R4-M5).
+ * Mapped to refuse exit 2 — same family as NotAGitRepositoryError.
+ */
+export class GitCommandFailedError extends Error {
+  readonly name = "GitCommandFailedError";
+
+  constructor(detail: string) {
+    super(
+      `Git targeting failed: ${detail}. Pass --mutate <glob> to specify files.`,
+    );
+  }
+}
+
+/**
  * --workspace matched no declared package roots (ADR-036 / SC-345 refuse, exit 2).
  */
 export class EmptyWorkspaceMatchError extends Error {

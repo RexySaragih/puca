@@ -57,6 +57,12 @@ export interface TestRunnerPort {
    * Used for default outer timer: max(testTimeout + 2000, 7000).
    */
   getTestTimeoutMs(): number;
+  /**
+   * Apply the resolved outer mutant timer (CLI `--timeout` or default).
+   * Pool runners must honor this for IPC hang kills; sequential runners
+   * may no-op (use case races with the same value).
+   */
+  configureOuterTimeoutMs?(timeoutMs: number): void;
   runRelated(mutant: MutantRunRequest): Promise<RelatedRunResult>;
   respawn(): Promise<RunnerSession>;
   close(): Promise<void>;

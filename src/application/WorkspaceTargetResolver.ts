@@ -54,10 +54,15 @@ export class WorkspaceTargetResolver implements RunMutationSession {
       }
     }
 
+    // R4-M3: always emit a root aggregate so operators see package count + worst exit.
+    messages.push(
+      `Workspace: ${String(packageRoots.length)} package(s) scored; worst exit ${String(worstExit)}. Per-package reports and relative --json/--sarif/--html/--cache paths use each package cwd.`,
+    );
+
     return {
       statuses,
       exitCode: worstExit,
-      ...(messages.length > 0 ? { message: messages.join("\n") } : {}),
+      message: messages.join("\n"),
     };
   }
 }

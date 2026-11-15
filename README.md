@@ -55,11 +55,11 @@ Contributors need **rustc** (see `rust-toolchain.toml`):
 ```bash
 git clone https://github.com/RexySaragih/puca.git
 cd puca
-npm install
+npm install      # required after every clone — runtime deps (e.g. micromatch) live here
 npm run build   # tsc → dist/ + napi-rs .node addon
 ```
 
-The binary entry is `dist/cli.js` (`package.json` `bin.puca`).
+The binary entry is `dist/cli.js` (`package.json` `bin.puca`). Local harnesses that depend on `file:../Púca` still need a complete `npm install` inside the Púca tree before `dist/cli.js` can load; prefer invoking `dist/cli.js` directly after build.
 
 ### Install from GitHub Release tarballs (Phase 3 distribution, rust-free)
 
@@ -82,7 +82,7 @@ Phase 3 installs the abi tarball explicitly beside the root (not via git `option
 Run from a Vitest TypeScript project (or from `fixtures/loop` after build):
 
 ```bash
-# Default: mutate git-dirty .ts / .tsx vs HEAD (staged + unstaged; untracked ignored)
+# Default: mutate git-dirty .ts/.tsx/.js/.jsx/.mjs/.cjs vs HEAD (untracked ignored)
 puca
 
 # Same default, plus untracked files (still honors .gitignore and hard excludes)
@@ -127,7 +127,7 @@ Invalid `--break-on-score` (non-integer, out of 1..100, missing value) → exit 
 | --- | --- |
 | `--html <path>` | One self-contained offline HTML report (inline CSS/JS; no Stryker UI package, no CDN) |
 | `--cache` | Metadata-only `.puca/cache.json` under cwd (or per-package under `--workspace`); skips re-scoring unchanged sites |
-| `--workspace <glob>` | Sequential sessions for matching packages; process exit is worst-of `2 > 1 > 0` |
+| `--workspace <glob>` | Sequential sessions for matching packages; stderr prints a root aggregate (`Workspace: N package(s)…`); process exit is worst-of `2 > 1 > 0`. Relative `--json`/`--sarif`/`--html`/`--cache` paths resolve per package cwd |
 | `--runner vitest\|jest` | Default Vitest; Jest resolves from cwd, soft-forces `workers=1` |
 
 ### CI merge-gate examples
@@ -203,21 +203,21 @@ import { mutationReportSchemaPath } from "puca/schemaPath";
 
 | Code | Meaning |
 | ---: | --- |
-| **0** | Completed with 0 Survived and 0 Error (including idle: nothing to mutate) |
-| **1** | Completed with ≥1 Survived |
-| **2** | Refuse to score, or ≥1 Error (Error wins even if Survived also exists) |
+| **0** | Completed with 0 Survived and 0 Error, and opt-in CI gates (if any) pass — including idle: nothing to mutate |
+| **1** | ≥1 Survived, **or** opt-in `--break-on-score` / `--fail-on-no-coverage` failed |
+| **2** | Refuse to score, or ≥1 Error (Error wins even if Survived / gates also fail) |
 
 ```mermaid
 flowchart TD
   Start([puca starts]) --> Target{Targeting}
   Target -->|"clean / zero eligible"| Idle["No files to mutate<br/>exit 0"]
   Target -->|"--mutate empty after excludes"| RefuseMutate["Refuse<br/>exit 2"]
-  Target -->|"not a git repo, no --mutate"| RefuseGit["Exact A6 stderr<br/>exit 2"]
+  Target -->|"not a git repo / git failed, no --mutate"| RefuseGit["Refuse<br/>exit 2"]
   Target -->|candidates found| Run[Score mutants]
   Run --> Score{Result}
   Score -->|any Error| E2[exit 2]
-  Score -->|Survived ≥ 1, no Error| E1[exit 1]
-  Score -->|only Killed / Timeout / NoCoverage| E0[exit 0]
+  Score -->|"Survived ≥ 1 OR score gate OR no-coverage gate"| E1[exit 1]
+  Score -->|only Killed / Timeout / NoCoverage and gates pass| E0[exit 0]
 ```
 
 **A6 targeting lock**

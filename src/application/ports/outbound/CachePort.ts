@@ -11,7 +11,7 @@ export interface CachePort {
   get(key: string): CachedMutantStatus | undefined;
   set(key: string, entry: CachedMutantStatus): void;
   /**
-   * Composite key: engineVersion ⊕ site identity ⊕ related test contents hash.
+   * Composite key: engineVersion ⊕ site identity ⊕ source ⊕ related test contents.
    */
   keyFor(input: CacheKeyInput): string;
 }
@@ -22,6 +22,8 @@ export interface CacheKeyInput {
   readonly endOffset: number;
   readonly mutatorName: string;
   readonly replacement: string;
+  /** Original source under mutation — prevents stale hits after edits. */
+  readonly sourceContents: string;
   /** Concatenated related-spec file contents (order-stable). */
   readonly relatedContents: string;
 }

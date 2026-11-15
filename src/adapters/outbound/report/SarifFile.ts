@@ -84,7 +84,7 @@ export class SarifFile implements ReportPort {
                 {
                   id: RULE_ID,
                   shortDescription: {
-                    text: "Mutation survived related Vitest specs",
+                    text: "Mutation survived related tests",
                   },
                 },
               ],

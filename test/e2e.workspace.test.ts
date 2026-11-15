@@ -87,6 +87,7 @@ describe("Workspace --workspace E2E and behavioral coverage", () => {
 
       expect(order).toEqual(["/tmp/pkg-a", "/tmp/pkg-b"]);
       expect(result.exitCode).toBe(1);
+      expect(result.message).toMatch(/Workspace: 2 package\(s\) scored; worst exit 1/);
       expect(worstOfExit(0, 1)).toBe(1);
       expect(worstOfExit(1, 2)).toBe(2);
     });

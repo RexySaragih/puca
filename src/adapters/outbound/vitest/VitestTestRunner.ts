@@ -316,14 +316,18 @@ function classifyVitestRun(
       : null;
 
   for (const mod of result.testModules) {
-    if (related != null) {
-      const moduleId = mod.moduleId != null ? normalizeModulePath(mod.moduleId) : "";
-      if (moduleId.length === 0 || !related.has(moduleId)) {
-        continue;
-      }
-    }
     if (mod.ok()) {
       continue;
+    }
+    if (related != null) {
+      const moduleId =
+        mod.moduleId != null ? normalizeModulePath(mod.moduleId) : "";
+      // R4-M1: empty moduleId on a failure is ambiguous — treat as kill, not skip
+      // (skipping would mis-attribute Survived). Named modules outside relatedSpecs
+      // are ignored so stale prior-run modules on the keep-alive session do not leak.
+      if (moduleId.length > 0 && !related.has(moduleId)) {
+        continue;
+      }
     }
     for (const test of mod.children.allTests("failed")) {
       return {

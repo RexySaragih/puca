@@ -49,7 +49,7 @@ export function parseArgs(argv: readonly string[]): ParsedCliArgs {
     }
 
     if (token === "--mutate") {
-      mutateGlob = requireValue(argv, i, "--mutate");
+      mutateGlob = requireNonEmptyValue(argv, i, "--mutate");
       i += 1;
       continue;
     }
@@ -117,7 +117,10 @@ export function parseArgs(argv: readonly string[]): ParsedCliArgs {
       continue;
     }
     if (token.startsWith("--mutate=")) {
-      mutateGlob = token.slice("--mutate=".length);
+      mutateGlob = requireNonEmptyEqualsValue(
+        token.slice("--mutate=".length),
+        "--mutate",
+      );
       continue;
     }
     if (token.startsWith("--json=")) {
@@ -183,6 +186,24 @@ function requireValue(
     throw new Error(`Missing value for ${flag}`);
   }
   return value;
+}
+
+/** Like requireValue but rejects empty / whitespace-only (A6 empty --mutate). */
+function requireNonEmptyValue(
+  argv: readonly string[],
+  flagIndex: number,
+  flag: string,
+): string {
+  return requireNonEmptyEqualsValue(requireValue(argv, flagIndex, flag), flag);
+}
+
+function requireNonEmptyEqualsValue(raw: string, flag: string): string {
+  if (raw.trim() === "") {
+    throw new Error(
+      `Error: Invalid value for ${flag}. Expected a non-empty glob, received empty or missing argument.`,
+    );
+  }
+  return raw;
 }
 
 /** Like requireValue but returns "" when missing so gate flags can emit UX-005 diagnostics. */

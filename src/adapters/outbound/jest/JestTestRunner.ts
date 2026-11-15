@@ -19,6 +19,7 @@ import {
   type JestRunCli,
   type JestRunCliResult,
   type ProjectJest,
+  resolveJestTestTimeoutMs,
   resolveProjectJest,
 } from "./resolveProjectJest.js";
 import { scanJestRelated } from "./scanJestRelated.js";
@@ -65,6 +66,8 @@ export class JestTestRunner implements TestRunnerPort {
 
     const project = this.resolveJest(this.cwd);
     this.runCLI = project.runCLI;
+    this.testTimeoutMs =
+      (await resolveJestTestTimeoutMs(this.cwd)) ?? DEFAULT_TEST_TIMEOUT_MS;
     publishBuffers(overlay.buffers);
 
     return { id: SESSION_ID };

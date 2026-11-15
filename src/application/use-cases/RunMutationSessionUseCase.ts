@@ -8,6 +8,7 @@ import type {
 import {
   EmptyMutateMatchError,
   NO_FILES_TO_MUTATE_MESSAGE,
+  GitCommandFailedError,
   NotAGitRepositoryError,
 } from "../../domain/targetingErrors.js";
 import {
@@ -140,6 +141,8 @@ export class RunMutationSessionUseCase implements RunMutationSession {
       input.timeoutMs,
       this.deps.testRunner.getTestTimeoutMs(),
     );
+    // Pool IPC hang timer must match banner / sequential race (CLI --timeout).
+    this.deps.testRunner.configureOuterTimeoutMs?.(outerTimeoutMs);
 
     const cache =
       input.cache === true && this.deps.cache != null ? this.deps.cache : undefined;
@@ -217,6 +220,7 @@ export class RunMutationSessionUseCase implements RunMutationSession {
         const scored = await this.scoreSiteWithCache(
           site,
           entry.related,
+          entry.originalSource,
           cache,
           async () => {
             if (entry.related.length === 0) {
@@ -278,6 +282,7 @@ export class RunMutationSessionUseCase implements RunMutationSession {
       const scored = await this.scoreSiteWithCache(
         job.site,
         job.related,
+        job.originalSource,
         cache,
         async () => {
           if (job.related.length === 0) {
@@ -313,6 +318,7 @@ export class RunMutationSessionUseCase implements RunMutationSession {
   private async scoreSiteWithCache(
     site: Site,
     related: readonly string[],
+    originalSource: string,
     cache: CachePort | undefined,
     scoreMiss: () => Promise<Mutant>,
   ): Promise<Mutant> {
@@ -327,6 +333,7 @@ export class RunMutationSessionUseCase implements RunMutationSession {
       endOffset: site.endOffset,
       mutatorName: site.mutatorName,
       replacement: site.replacement,
+      sourceContents: originalSource,
       relatedContents,
     });
 
@@ -518,17 +525,11 @@ export class RunMutationSessionUseCase implements RunMutationSession {
     error: unknown,
     jsonPath?: string,
   ): Promise<SessionResult> {
-    if (error instanceof NotAGitRepositoryError) {
-      return this.reportResult(
-        {
-          statuses: [],
-          exitCode: EXIT_REFUSE,
-          message: error.message,
-        },
-        { jsonPath },
-      );
-    }
-    if (error instanceof EmptyMutateMatchError) {
+    if (
+      error instanceof NotAGitRepositoryError ||
+      error instanceof GitCommandFailedError ||
+      error instanceof EmptyMutateMatchError
+    ) {
       return this.reportResult(
         {
           statuses: [],

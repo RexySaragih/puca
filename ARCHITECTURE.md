@@ -173,7 +173,7 @@ Path: `{cwd}/.puca/cache.json` (per-package under `--workspace`). Opt-in via `--
 }
 ```
 
-- **Key** = `sha256(engineVersion ⊕ file ⊕ start ⊕ end ⊕ mutator ⊕ replacement ⊕ relatedTestContents)`
+- **Key** = `sha256(engineVersion ⊕ file ⊕ start ⊕ end ⊕ mutator ⊕ replacement ⊕ sourceContents ⊕ relatedTestContents)`
 - **Allowed fields** on entries: `status`, optional `killedBy`, `schemaVersion`
 - **Forbidden**: any `mutatedSource` (or other source buffers) — load fail-opens to empty
 - Corrupt / truncated / version mismatch → ignore file, full score, rewrite on flush
