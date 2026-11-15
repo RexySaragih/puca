@@ -11,6 +11,7 @@ import type { Mutant, SessionResult } from "../../../domain/mutant.js";
 export class RecordingReport implements ReportPort {
   readonly terminalResults: SessionResult[] = [];
   readonly jsonWrites: Array<{ path: string; schemaDoc: unknown }> = [];
+  readonly sarifWrites: Array<{ path: string; result: SessionResult }> = [];
   readonly notices: string[] = [];
   readonly sessionStarts: SessionStartInfo[] = [];
   readonly mutantResults: Array<{ mutant: Mutant; progress: MutantProgress }> =
@@ -34,5 +35,9 @@ export class RecordingReport implements ReportPort {
 
   async writeJson(path: string, result: SessionResult): Promise<void> {
     this.jsonWrites.push({ path, schemaDoc: result });
+  }
+
+  async writeSarif(path: string, result: SessionResult): Promise<void> {
+    this.sarifWrites.push({ path, result });
   }
 }

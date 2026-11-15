@@ -11,8 +11,11 @@ import { FakeMutatorEngine } from "../src/adapters/outbound/memory/FakeMutatorEn
 import { FakeTestRunner } from "../src/adapters/outbound/memory/FakeTestRunner.js";
 import { InMemoryFiles } from "../src/adapters/outbound/memory/InMemoryFiles.js";
 import { InMemorySourceLocator } from "../src/adapters/outbound/memory/InMemorySourceLocator.js";
+import { RecordingReport } from "../src/adapters/outbound/memory/RecordingReport.js";
+import { SarifFile } from "../src/adapters/outbound/report/SarifFile.js";
 import { SchemaJsonFile } from "../src/adapters/outbound/report/SchemaJsonFile.js";
 import { StdioReport } from "../src/adapters/outbound/report/StdioReport.js";
+import type { ReportPort } from "../src/application/ports/outbound/ReportPort.js";
 import { RunMutationSessionUseCase } from "../src/application/use-cases/RunMutationSessionUseCase.js";
 import {
   toAbsolutePath,
@@ -82,6 +85,9 @@ describe("CLI terminal report and exit codes", () => {
         includeUntracked: false,
         verbose: false,
         workers: 1,
+        breakOnScore: undefined,
+        failOnNoCoverage: false,
+        sarifPath: undefined,
       });
     });
 
@@ -93,6 +99,9 @@ describe("CLI terminal report and exit codes", () => {
         includeUntracked: true,
         verbose: false,
         workers: 1,
+        breakOnScore: undefined,
+        failOnNoCoverage: false,
+        sarifPath: undefined,
       });
     });
 
@@ -104,6 +113,9 @@ describe("CLI terminal report and exit codes", () => {
         includeUntracked: false,
         verbose: true,
         workers: 1,
+        breakOnScore: undefined,
+        failOnNoCoverage: false,
+        sarifPath: undefined,
       });
     });
 
@@ -116,12 +128,90 @@ describe("CLI terminal report and exit codes", () => {
       expect(parseArgs([]).workers).toBe(1);
     });
 
-    it("should refuse unknown Phase 3.2 non-flags (SC-327)", () => {
+    it("should parse opt-in CI flags (REQ-1401 / REQ-1404)", () => {
+      expect(
+        parseArgs([
+          "--break-on-score",
+          "80",
+          "--fail-on-no-coverage",
+          "--sarif",
+          "out.sarif",
+        ]),
+      ).toEqual({
+        mutateGlob: undefined,
+        jsonPath: undefined,
+        timeoutMs: undefined,
+        includeUntracked: false,
+        verbose: false,
+        workers: 1,
+        breakOnScore: 80,
+        failOnNoCoverage: true,
+        sarifPath: "out.sarif",
+      });
+      expect(parseArgs([]).breakOnScore).toBeUndefined();
+      expect(parseArgs([]).failOnNoCoverage).toBe(false);
+      expect(parseArgs([]).sarifPath).toBeUndefined();
+      expect(parseArgs(["--fail-on-no-coverage"]).failOnNoCoverage).toBe(true);
+    });
+
+    it("should refuse unknown non-flags (SC-327)", () => {
       expect(() => parseArgs(["--mutate-template-expressions"])).toThrow(
         /Unknown argument/,
       );
-      expect(() => parseArgs(["--break-on-score"])).toThrow(/Unknown argument/);
       expect(() => parseArgs(["--file-summary"])).toThrow(/Unknown argument/);
+      expect(() => parseArgs(["--report", "html"])).toThrow(/Unknown argument/);
+    });
+
+    it("should refuse invalid --break-on-score (SC-331)", async () => {
+      const { runCli } = await import("../src/cli.js");
+      const cases: Array<{ argv: string[]; received: string }> = [
+        { argv: ["--break-on-score", "80.5"], received: "80.5" },
+        { argv: ["--break-on-score", "0"], received: "0" },
+        { argv: ["--break-on-score", "101"], received: "101" },
+        { argv: ["--break-on-score"], received: "" },
+        { argv: ["--break-on-score="], received: "" },
+      ];
+
+      for (const { argv, received } of cases) {
+        let stderr = "";
+        const prevWrite = process.stderr.write.bind(process.stderr);
+        process.stderr.write = ((chunk: string | Uint8Array) => {
+          stderr += String(chunk);
+          return true;
+        }) as typeof process.stderr.write;
+        try {
+          const code = await runCli({ argv, cwd: repoRoot });
+          expect(code, argv.join(" ")).toBe(2);
+          expect(stderr, argv.join(" ")).toContain(
+            `Error: Invalid value for --break-on-score. Expected integer between 1 and 100, received '${received}'.`,
+          );
+        } finally {
+          process.stderr.write = prevWrite;
+        }
+      }
+    });
+
+    it("should refuse missing or empty --sarif path (SC-331 / REQ-1403)", async () => {
+      const { runCli } = await import("../src/cli.js");
+      const cases = [["--sarif"], ["--sarif="], ["--sarif", ""]];
+
+      for (const argv of cases) {
+        let stderr = "";
+        const prevWrite = process.stderr.write.bind(process.stderr);
+        process.stderr.write = ((chunk: string | Uint8Array) => {
+          stderr += String(chunk);
+          return true;
+        }) as typeof process.stderr.write;
+        try {
+          const code = await runCli({ argv, cwd: repoRoot });
+          expect(code, argv.join(" ")).toBe(2);
+          expect(stderr, argv.join(" ")).toContain(
+            "Error: Invalid value for --sarif. Expected a valid file path, received empty or missing argument.",
+          );
+        } finally {
+          process.stderr.write = prevWrite;
+        }
+      }
     });
 
     it("should refuse invalid --workers (AC3)", async () => {
@@ -806,5 +896,157 @@ describe("exit code priority (Survived + Error)", () => {
       "Survived",
       "RuntimeError",
     ]);
+  });
+});
+
+describe("SARIF report (SC-336 / ADR-033)", () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "puca-sarif-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  it("should write Survived-only SARIF 2.1.0 with line/col when --sarif is set", async () => {
+    const source = toAbsolutePath(path.join(tempDir, "src/a.ts"));
+    const files = new InMemoryFiles(tempDir);
+    const mutator = new FakeMutatorEngine();
+    const testRunner = new FakeTestRunner();
+    const sourceLocator = new InMemorySourceLocator();
+    const recording = new RecordingReport();
+    const sarif = new SarifFile(tempDir);
+    const report: ReportPort = {
+      writeTerminal: (r) => recording.writeTerminal(r),
+      writeSarif: (p, r) => sarif.writeSarif(p, r),
+    };
+
+    const survived = siteFor(tempDir, source, 10, "ArithmeticOperator", "+", "-");
+    const killed = siteFor(tempDir, source, 20, "BooleanLiteral", "true", "false");
+    sourceLocator.setCandidates([source]);
+    files.seed(source, "a+b; true;");
+    mutator.setSites(source, [survived, killed]);
+    const spec = toAbsolutePath(path.join(tempDir, "test/a.test.ts"));
+    testRunner.setAllSpecs([spec]);
+    testRunner.setStaticImports({ [spec]: [source] });
+    testRunner.baselineResult = { ok: true };
+    testRunner.queueRelatedBehaviors(
+      { kind: "passed" },
+      { kind: "failed", failingTestId: "t" },
+    );
+
+    const useCase = new RunMutationSessionUseCase({
+      mutator,
+      testRunner,
+      sourceLocator,
+      files,
+      report,
+    });
+    const sarifPath = path.join(tempDir, "out.sarif");
+
+    const result = await useCase.execute({ cwd: tempDir, sarifPath });
+
+    expect(result.exitCode).toBe(1);
+    const raw = JSON.parse(await fs.readFile(sarifPath, "utf8")) as {
+      version: string;
+      runs: Array<{
+        tool: { driver: { name: string } };
+        results: Array<{
+          level: string;
+          message: { text: string };
+          locations: Array<{
+            physicalLocation: {
+              artifactLocation: { uri: string };
+              region: { startLine: number; startColumn: number };
+            };
+          }>;
+        }>;
+      }>;
+    };
+    expect(raw.version).toBe("2.1.0");
+    expect(raw.runs[0]?.tool.driver.name).toBe("puca");
+    expect(raw.runs[0]?.results).toHaveLength(1);
+    const only = raw.runs[0]!.results[0]!;
+    expect(only.level).toBe("error");
+    expect(only.message.text).toContain("ArithmeticOperator");
+    expect(only.message.text).toContain("+ → -");
+    expect(only.locations[0]!.physicalLocation.region.startLine).toBe(
+      survived.line,
+    );
+    expect(only.locations[0]!.physicalLocation.region.startColumn).toBe(
+      survived.column,
+    );
+    expect(only.locations[0]!.physicalLocation.artifactLocation.uri).toMatch(
+      /^file:\/\//,
+    );
+  });
+
+  it("should not write a SARIF file when --sarif is omitted", async () => {
+    const source = toAbsolutePath(path.join(tempDir, "src/a.ts"));
+    const files = new InMemoryFiles(tempDir);
+    const mutator = new FakeMutatorEngine();
+    const testRunner = new FakeTestRunner();
+    const sourceLocator = new InMemorySourceLocator();
+    const report = new RecordingReport();
+    const site = siteFor(tempDir, source, 1, "Arithmetic", "+", "-");
+    sourceLocator.setCandidates([source]);
+    files.seed(source, "a+b");
+    mutator.setSites(source, [site]);
+    const spec = toAbsolutePath(path.join(tempDir, "test/a.test.ts"));
+    testRunner.setAllSpecs([spec]);
+    testRunner.setStaticImports({ [spec]: [source] });
+    testRunner.baselineResult = { ok: true };
+    testRunner.relatedResult = { kind: "passed" };
+
+    const useCase = new RunMutationSessionUseCase({
+      mutator,
+      testRunner,
+      sourceLocator,
+      files,
+      report,
+    });
+
+    await useCase.execute({ cwd: tempDir });
+
+    expect(report.sarifWrites).toHaveLength(0);
+    const entries = await fs.readdir(tempDir);
+    expect(entries.some((name) => name.endsWith(".sarif"))).toBe(false);
+  });
+
+  it("should keep --json thresholds at 80/60 when --break-on-score is also set (REQ-1604)", async () => {
+    const sourceFile = toAbsolutePath(path.join(tempDir, "src/add.ts"));
+    const sourceText = "export const add = (a: number, b: number) => a + b;\n";
+    await fs.mkdir(path.join(tempDir, "src"), { recursive: true });
+    await fs.writeFile(sourceFile, sourceText, "utf8");
+    const files = new InMemoryFiles(tempDir);
+    files.seed(sourceFile, sourceText);
+    const schema = new SchemaJsonFile(files, tempDir);
+    const site = siteFor(tempDir, sourceFile, 48, "Arithmetic", "+", "-");
+    const jsonPath = path.join(tempDir, "report.json");
+
+    await schema.writeJson(jsonPath, {
+      statuses: [{ site, status: "Survived" }],
+      exitCode: 1,
+    });
+
+    const raw = JSON.parse(await fs.readFile(jsonPath, "utf8")) as {
+      thresholds: { high: number; low: number };
+    };
+    expect(raw.thresholds).toEqual({ high: 80, low: 60 });
+  });
+
+  it("should keep ReportPort surface additive with optional writeSarif (AC1)", async () => {
+    const source = await fs.readFile(
+      path.join(repoRoot, "src/application/ports/outbound/ReportPort.ts"),
+      "utf8",
+    );
+    expect(source).toMatch(/writeSarif\?/);
+    expect(source).toMatch(/writeTerminal/);
+    expect(source).toMatch(/writeJson\?/);
+    expect(source).toMatch(/writeNotice\?/);
+    expect(source).toMatch(/writeSessionStart\?/);
+    expect(source).toMatch(/writeMutantResult\?/);
   });
 });

@@ -317,6 +317,167 @@ describe("Sequential mutant loop statuses", () => {
       mutator.apply = originalApply;
     });
   });
+
+  describe("opt-in quality gates (SC-332..335)", () => {
+    it("should exit 1 when score is below --break-on-score (SC-332)", async () => {
+      // Given — 3 Killed + 1 Survived → score 75; breakOnScore 80
+      const { useCase, mutator, testRunner, files, sourceLocator } =
+        createHarness();
+      const source = abs("src/foo.ts");
+      const sites = [
+        siteFor(source, 10, "Arithmetic", "+", "-"),
+        siteFor(source, 20, "Arithmetic", "-", "+"),
+        siteFor(source, 30, "Arithmetic", "*", "/"),
+        siteFor(source, 40, "Equality", "===", "!=="),
+      ];
+      await seedCoveredFile({
+        files,
+        mutator,
+        testRunner,
+        sourceLocator,
+        sites,
+        sourceFile: source,
+      });
+      testRunner.queueRelatedBehaviors(
+        { kind: "failed", failingTestId: "t1" },
+        { kind: "failed", failingTestId: "t2" },
+        { kind: "failed", failingTestId: "t3" },
+        { kind: "passed" },
+      );
+
+      const result = await useCase.execute({ cwd, breakOnScore: 80 });
+
+      expect(result.statuses.filter((m) => m.status === "Killed")).toHaveLength(
+        3,
+      );
+      expect(result.statuses.filter((m) => m.status === "Survived")).toHaveLength(
+        1,
+      );
+      expect(result.exitCode).toBe(1);
+    });
+
+    it("should not fail on score alone when Killed+Survived is 0 (SC-333)", async () => {
+      const { useCase, mutator, testRunner, files, sourceLocator } =
+        createHarness();
+      const source = abs("src/foo.ts");
+      const sites = [
+        siteFor(source, 10, "Arithmetic", "+", "-"),
+        siteFor(source, 20, "Boolean", "true", "false"),
+      ];
+      await seedCoveredFile({
+        files,
+        mutator,
+        testRunner,
+        sourceLocator,
+        sites,
+        sourceFile: source,
+      });
+      testRunner.queueRelatedBehaviors("hang", { kind: "timeout" });
+
+      const result = await useCase.execute({
+        cwd,
+        breakOnScore: 80,
+        timeoutMs: 40,
+      });
+
+      expect(result.statuses.every((m) => m.status === "Timeout")).toBe(true);
+      expect(result.exitCode).toBe(0);
+    });
+
+    it("should exit 1 for --fail-on-no-coverage with NoCoverage and no Survived (SC-334)", async () => {
+      const { useCase, mutator, testRunner, files, sourceLocator } =
+        createHarness();
+      const source = abs("src/foo.ts");
+      const site = siteFor(source, 48, "Arithmetic", "+", "-");
+      await seedCoveredFile({
+        files,
+        mutator,
+        testRunner,
+        sourceLocator,
+        sites: [site],
+        sourceFile: source,
+      });
+      testRunner.setAllSpecs([]);
+      testRunner.setStaticImports({});
+
+      const result = await useCase.execute({
+        cwd,
+        failOnNoCoverage: true,
+      });
+
+      expect(result.statuses).toEqual([{ site, status: "NoCoverage" }]);
+      expect(result.exitCode).toBe(1);
+    });
+
+    it("should exit 1 for Survived even when score meets breakOnScore (SC-335)", async () => {
+      // Given — 4 Killed + 1 Survived → score 80; breakOnScore 80; Survived still wins
+      const { useCase, mutator, testRunner, files, sourceLocator } =
+        createHarness();
+      const source = abs("src/foo.ts");
+      const sites = [
+        siteFor(source, 10, "Arithmetic", "+", "-"),
+        siteFor(source, 20, "Arithmetic", "-", "+"),
+        siteFor(source, 30, "Arithmetic", "*", "/"),
+        siteFor(source, 40, "Arithmetic", "/", "*"),
+        siteFor(source, 50, "Equality", "===", "!=="),
+      ];
+      await seedCoveredFile({
+        files,
+        mutator,
+        testRunner,
+        sourceLocator,
+        sites,
+        sourceFile: source,
+      });
+      testRunner.queueRelatedBehaviors(
+        { kind: "failed", failingTestId: "t1" },
+        { kind: "failed", failingTestId: "t2" },
+        { kind: "failed", failingTestId: "t3" },
+        { kind: "failed", failingTestId: "t4" },
+        { kind: "passed" },
+      );
+
+      const result = await useCase.execute({ cwd, breakOnScore: 80 });
+
+      expect(result.statuses.filter((m) => m.status === "Survived")).toHaveLength(
+        1,
+      );
+      expect(result.exitCode).toBe(1);
+    });
+
+    it("should exit 2 for RuntimeError even when gates would also fail (SC-332)", async () => {
+      const { useCase, mutator, testRunner, files, sourceLocator } =
+        createHarness();
+      const source = abs("src/foo.ts");
+      const sites = [
+        siteFor(source, 10, "Arithmetic", "+", "-"),
+        siteFor(source, 20, "Arithmetic", "-", "+"),
+      ];
+      await seedCoveredFile({
+        files,
+        mutator,
+        testRunner,
+        sourceLocator,
+        sites,
+        sourceFile: source,
+      });
+      testRunner.queueRelatedBehaviors(
+        { kind: "error", message: "boom" },
+        { kind: "passed" },
+      );
+
+      const result = await useCase.execute({
+        cwd,
+        breakOnScore: 100,
+        failOnNoCoverage: true,
+      });
+
+      expect(result.statuses.some((m) => m.status === "RuntimeError")).toBe(
+        true,
+      );
+      expect(result.exitCode).toBe(2);
+    });
+  });
 });
 
 describe("Concurrent mutant scoring (workers >= 2)", () => {

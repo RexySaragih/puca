@@ -13,6 +13,12 @@ export interface MutationSessionInput {
    * N>=2 uses PooledVitestTestRunner (po_2a0301).
    */
   readonly workers?: number;
+  /** Opt-in CI score gate (1..100). Unset when `--break-on-score` omitted. */
+  readonly breakOnScore?: number;
+  /** Opt-in: exit 1 when any NoCoverage mutant exists. */
+  readonly failOnNoCoverage?: boolean;
+  /** Opt-in SARIF output path (`--sarif`). */
+  readonly sarifPath?: string;
 }
 
 /**

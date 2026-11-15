@@ -9,6 +9,7 @@ import { NodeWorkspaceFiles } from "../adapters/outbound/fs/NodeWorkspaceFiles.j
 import { GitDiffLocator } from "../adapters/outbound/git/GitDiffLocator.js";
 import { NapiMutatorEngine } from "../adapters/outbound/napi/NapiMutatorEngine.js";
 import { CompositeReport } from "../adapters/outbound/report/CompositeReport.js";
+import { SarifFile } from "../adapters/outbound/report/SarifFile.js";
 import { SchemaJsonFile } from "../adapters/outbound/report/SchemaJsonFile.js";
 import { StdioReport } from "../adapters/outbound/report/StdioReport.js";
 import { PooledVitestTestRunner } from "../adapters/outbound/vitest/PooledVitestTestRunner.js";
@@ -46,7 +47,7 @@ export interface Runtime {
  * `useFakes: true` → createTestRuntime() (all-memory adapters).
  * Default / false → NodeWorkspaceFiles, GitDiffLocator, NapiMutatorEngine,
  * VitestTestRunner (workers===1) or PooledVitestTestRunner (workers>=2),
- * StdioReport + SchemaJsonFile.
+ * StdioReport + SchemaJsonFile + SarifFile.
  */
 export function createRuntime(options: CreateRuntimeOptions = {}): Runtime {
   if (options.useFakes === true) {
@@ -92,7 +93,8 @@ function createProductionRuntime(cwd: string, workers: number): Runtime {
       : new VitestTestRunner({ cwd });
   const stdio = new StdioReport({ cwd });
   const schemaJson = new SchemaJsonFile(files, cwd);
-  const report = new CompositeReport(stdio, schemaJson);
+  const sarifFile = new SarifFile(cwd);
+  const report = new CompositeReport(stdio, schemaJson, sarifFile);
 
   const runMutationSession = new RunMutationSessionUseCase({
     mutator,

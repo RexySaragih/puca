@@ -63,12 +63,12 @@ flowchart LR
 | Change | Primary paths |
 | --- | --- |
 | Domain types / statuses | `src/domain/` |
-| Session orchestration | `src/application/use-cases/RunMutationSessionUseCase.ts` |
-| Ports | `src/application/ports/` |
+| Session orchestration / CI exit gates | `src/application/use-cases/RunMutationSessionUseCase.ts`, `src/application/evaluateQualityGates.ts` |
+| Ports | `src/application/ports/` (`ReportPort.writeSarif?` additive) |
 | CLI flags / exit process | `src/adapters/inbound/cli/`, `src/cli.ts` |
 | Git targeting / excludes | `src/adapters/outbound/git/`, `src/domain/excludes.ts` |
 | Vitest session / RAM / map | `src/adapters/outbound/vitest/` |
-| Reports / File Summary table | `src/adapters/outbound/report/` (`StdioReport`, `formatFileSummaryTable`) |
+| Reports / File Summary / SARIF | `src/adapters/outbound/report/` (`StdioReport`, `formatFileSummaryTable`, `SarifFile`) |
 | Operators / disable / apply / TemplateLiteral skip | `crates/puca-core/src/` (`operators/mod.rs` `visit_template_literal`) |
 | NAPI surface | `crates/puca-binding/`, `src/adapters/outbound/napi/` |
 | Fixture oracle | `fixtures/loop/`, `test/e2e.loopFixture.test.ts` |

@@ -10,6 +10,10 @@ import {
   NO_FILES_TO_MUTATE_MESSAGE,
   NotAGitRepositoryError,
 } from "../../domain/targetingErrors.js";
+import {
+  countsFromStatuses,
+  evaluateQualityGates,
+} from "../evaluateQualityGates.js";
 import type {
   MutationSessionInput,
   RunMutationSession,
@@ -33,7 +37,6 @@ export interface RunMutationSessionDeps {
 }
 
 const EXIT_OK = 0;
-const EXIT_SURVIVED = 1;
 const EXIT_REFUSE = 2;
 
 const OUTER_TIMER_PADDING_MS = 2000;
@@ -141,7 +144,10 @@ export class RunMutationSessionUseCase implements RunMutationSession {
     return this.reportResult(
       {
         statuses,
-        exitCode: exitCodeForStatuses(statuses),
+        exitCode: evaluateQualityGates(countsFromStatuses(statuses), {
+          breakOnScore: input.breakOnScore,
+          failOnNoCoverage: input.failOnNoCoverage,
+        }),
         verboseFooter:
           input.verbose === true
             ? formatVerboseFooter(
@@ -153,6 +159,7 @@ export class RunMutationSessionUseCase implements RunMutationSession {
             : undefined,
       },
       input.jsonPath,
+      input.sarifPath,
     );
   }
 
@@ -450,10 +457,14 @@ export class RunMutationSessionUseCase implements RunMutationSession {
   private async reportResult(
     result: SessionResult,
     jsonPath?: string,
+    sarifPath?: string,
   ): Promise<SessionResult> {
     await this.deps.report.writeTerminal(result);
     if (jsonPath != null && this.deps.report.writeJson) {
       await this.deps.report.writeJson(jsonPath, result);
+    }
+    if (sarifPath != null && this.deps.report.writeSarif) {
+      await this.deps.report.writeSarif(sarifPath, result);
     }
     return result;
   }
@@ -612,16 +623,6 @@ export function resolveOuterTimeoutMs(
     return overrideMs;
   }
   return Math.max(testTimeoutMs + OUTER_TIMER_PADDING_MS, OUTER_TIMER_FLOOR_MS);
-}
-
-function exitCodeForStatuses(statuses: readonly Mutant[]): number {
-  if (statuses.some((entry) => entry.status === "RuntimeError")) {
-    return EXIT_REFUSE;
-  }
-  if (statuses.some((entry) => entry.status === "Survived")) {
-    return EXIT_SURVIVED;
-  }
-  return EXIT_OK;
 }
 
 function countAllSites(discovered: readonly DiscoveredFile[]): number {

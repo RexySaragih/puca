@@ -82,7 +82,8 @@ flowchart TD
 | Mutator | Oxc (Rust) via NAPI: arithmetic, equality, boolean, logical, conditional predicates. Lazy byte-offset apply. Phase 3.2: expressions inside any `TemplateLiteral` (`${…}`, tagged or untagged) are never mutated — no opt-in flag. |
 | Disable | `// puca-disable-next-line`, `// puca-disable` |
 | Session | One Vitest keep-alive by default (`--workers 1` / omit). Vite RAM plugin; sequential mutants; outer timeout + respawn. `--workers N` (N≥2) opts into a fork pool of isolated keep-alives (Phase 2). `--verbose` lists files, mutators, disable omissions, respawns/recycles. |
-| Report | Terminal (`file:line:col` + `-`/`+` lines + five buckets + Phase 3.2 `── File Summary ──` per-file Kill% table after Summary on scored runs); optional mutation-testing-report-schema JSON (`puca/schema/mutation-report.json`) |
+| Report | Terminal (`file:line:col` + `-`/`+` lines + five buckets + Phase 3.2 `── File Summary ──` per-file Kill% table after Summary on scored runs); optional mutation-testing-report-schema JSON (`puca/schema/mutation-report.json`); optional Survived-only SARIF via `--sarif <path>` (Phase 3.3) |
+| CI gates (opt-in) | `--break-on-score <1..100>`, `--fail-on-no-coverage` — default no-flag `puca` unchanged (ADR-031). Score = Killed/(Killed+Survived); Survived always contributes to exit 1; RuntimeError still exits 2. |
 | Exits | 0 / 1 / 2 as in [README.md](./README.md) |
 
 Package name: `puca` (unscoped). Binary: `puca`. **Not published** this cycle — consumers build from source (`npm run build`).
@@ -102,9 +103,9 @@ flowchart LR
 - Jest, `node:test` / `register()` adapters
 - V8 coverage maps, warm worker pools, disk mutant cache (`.puca/cache.json` stays later / out of 3.2)
 - CFG / type-aware pruning, Stryker bake-off claims
-- HTML reporter, Browser Mode, CJS, Vue/Svelte/Angular SFC
+- HTML reporter / `mutation-testing-elements` (deferred to Phase 3.4), Browser Mode, CJS, Vue/Svelte/Angular SFC
 - Multi-project Vitest monorepos (`--workspace`), mutating `.js`/`.mjs`
-- CI score gates (`--break-on-score`), SARIF
+- `--report` family; magic default SARIF path; coupling `--json` thresholds to `--break-on-score`
 - `--mutate-template-expressions` (template skip is unconditional in 3.2)
 - `puca.config.ts`
 - `@puca/*` npm scope, Windows as a release gate

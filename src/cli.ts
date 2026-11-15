@@ -50,6 +50,9 @@ export async function runCli(options: RunCliOptions = {}): Promise<number> {
     includeUntracked: parsed.includeUntracked,
     verbose: parsed.verbose,
     workers: parsed.workers,
+    breakOnScore: parsed.breakOnScore,
+    failOnNoCoverage: parsed.failOnNoCoverage,
+    sarifPath: parsed.sarifPath,
   });
 
   return result.exitCode;

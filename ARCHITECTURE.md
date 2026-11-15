@@ -15,7 +15,7 @@ flowchart LR
   Ports --> Runner["VitestTestRunner<br/>+ RAM plugin"]
   Ports --> Locator["GitDiffLocator"]
   Ports --> Files["NodeWorkspaceFiles"]
-  Ports --> Report["StdioReport + SchemaJsonFile"]
+  Ports --> Report["StdioReport + SchemaJsonFile + SarifFile"]
 ```
 
 - **TypeScript** owns orchestration (hexagonal).
@@ -48,7 +48,7 @@ flowchart LR
     P2[GitDiffLocator]
     P3[NapiMutatorEngine]
     P4[VitestTestRunner]
-    P5[StdioReport + SchemaJsonFile]
+    P5[StdioReport + SchemaJsonFile + SarifFile]
   end
   subgraph fakes ["createRuntime({ useFakes: true })"]
     F1[InMemoryFiles]
@@ -97,7 +97,7 @@ Composition root is the **only** place that chooses prod vs fake adapters. Do no
 | `TestRunnerPort` | Session, reverse map, baseline, runRelated, respawn (**unexported**) | `VitestTestRunner` | `FakeTestRunner` |
 | `SourceLocatorPort` | Candidate files | `GitDiffLocator` | `InMemorySourceLocator` |
 | `WorkspaceFilesPort` | `readUtf8` / `exists` / `isUnderCwd` | `NodeWorkspaceFiles` | `InMemoryFiles` |
-| `ReportPort` | Terminal (+ optional JSON); File Summary is StdioReport-only (ADR-030), not a port method | `StdioReport` + `SchemaJsonFile` | `RecordingReport` |
+| `ReportPort` | Terminal (+ optional JSON + optional SARIF); File Summary is StdioReport-only (ADR-030); `writeSarif?` additive (ADR-033) | `StdioReport` + `SchemaJsonFile` + `SarifFile` | `RecordingReport` |
 
 Clock / IDs are composition helpers, not ports (A12).
 
@@ -194,6 +194,9 @@ Missing `.node` after clone → exit 2 until `npm run build`.
 | ADR-012 | Oxc, not Babel/tsc/SWC |
 | ADR-029 | Skip all TemplateLiteral `${…}` expressions unconditionally; no CLI flag |
 | ADR-030 | File Summary table is StdioReport presentation only; Kill% not domain; ReportPort unchanged |
+| ADR-031 | Opt-in CI flags (`--break-on-score`, `--fail-on-no-coverage`, `--sarif`); default path unchanged |
+| ADR-032 | `evaluateQualityGates` + use-case exit authority; Survived never suppressed by score ≥ n |
+| ADR-033 | Additive `writeSarif?` + `SarifFile`; Survived-only SARIF 2.1.0; explicit `--sarif <path>` |
 
 ---
 

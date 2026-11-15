@@ -13,6 +13,7 @@ import {
 } from "../src/adapters/outbound/memory/index.js";
 import { NapiMutatorEngine } from "../src/adapters/outbound/napi/NapiMutatorEngine.js";
 import { CompositeReport } from "../src/adapters/outbound/report/CompositeReport.js";
+import { SarifFile } from "../src/adapters/outbound/report/SarifFile.js";
 import { SchemaJsonFile } from "../src/adapters/outbound/report/SchemaJsonFile.js";
 import { StdioReport } from "../src/adapters/outbound/report/StdioReport.js";
 import { PooledVitestTestRunner } from "../src/adapters/outbound/vitest/PooledVitestTestRunner.js";
@@ -40,6 +41,7 @@ describe("createRuntime wiring", () => {
       const report = runtime.report as CompositeReport;
       expect(report.stdio).toBeInstanceOf(StdioReport);
       expect(report.schemaJson).toBeInstanceOf(SchemaJsonFile);
+      expect(report.sarifFile).toBeInstanceOf(SarifFile);
 
       expect(runtime.files).not.toBeInstanceOf(InMemoryFiles);
       expect(runtime.sourceLocator).not.toBeInstanceOf(InMemorySourceLocator);

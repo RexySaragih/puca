@@ -8,6 +8,8 @@ export interface ReportPort {
   writeTerminal(result: SessionResult): Promise<void>;
   /** Build/write mutation-testing-report-schema JSON when `--json` is set. */
   writeJson?(path: string, result: SessionResult): Promise<void>;
+  /** Write Survived-only SARIF 2.1.0 when `--sarif` is set (ADR-033). */
+  writeSarif?(path: string, result: SessionResult): Promise<void>;
   /** Immediate stderr line (untracked notice, --verbose). */
   writeNotice?(line: string): void;
   /** Banner before the mutant loop (file/mutant counts). */

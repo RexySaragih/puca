@@ -100,9 +100,18 @@ puca --verbose
 
 # Parallel scoring workers (default 1 = Phase 1 in-process path; N>=2 fork pool)
 puca --mutate 'src/**/*.ts' --workers 4
+
+# Opt-in CI gates (Phase 3.3) — default no-flag path unchanged
+puca --mutate 'src/**/*.ts' --break-on-score 80
+puca --mutate 'src/**/*.ts' --fail-on-no-coverage
+puca --mutate 'src/**/*.ts' --sarif ./puca.sarif
 ```
 
 Invalid `--workers` (`0`, floats, non-integers, missing value) → exit **2** with a stderr diagnostic naming `--workers`.
+
+Invalid `--break-on-score` (non-integer, out of 1..100, missing value) → exit **2** naming `--break-on-score`. Missing/empty `--sarif` path → exit **2** naming `--sarif`.
+
+**CI gates (opt-in):** session score = `Killed / (Killed + Survived)` (N/A when denom is 0 — score gate does not fail). Exit priority: any RuntimeError → **2**; else Survived ≥ 1 **or** score `< n` **or** (`--fail-on-no-coverage` and NoCoverage ≥ 1) → **1**; else **0**. `--sarif` writes Survived-only SARIF 2.1.0 for GitHub Code Scanning upload (no default path).
 
 ### Fixture smoke
 
@@ -227,7 +236,7 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for ports, composition root, and the mu
 
 ## Out of scope this cycle
 
-Jest · `node:test` register hooks · Browser Mode · CJS · SFC frameworks · multi-project Vitest · npm registry publish · git `optionalDependencies` on unpublished names · `puca.config.ts` · HTML UI · `@puca` npm scope · Windows as a hard gate.
+Jest · `node:test` register hooks · Browser Mode · CJS · SFC frameworks · multi-project Vitest · npm registry publish · git `optionalDependencies` on unpublished names · `puca.config.ts` · HTML reporter (`mutation-testing-elements`, Phase 3.4) · `@puca` npm scope · Windows as a hard gate.
 
 Phase 3.1 **does** ship GHA-packed GitHub Release tarballs (root + abi); that is not npm `optionalDependencies` prebuilds.
 
