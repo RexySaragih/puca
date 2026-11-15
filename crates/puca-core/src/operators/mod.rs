@@ -9,7 +9,7 @@ mod logical;
 use crate::site::Site;
 use oxc_ast::ast::{
     BinaryExpression, BooleanLiteral, ConditionalExpression, DoWhileStatement, IfStatement,
-    LogicalExpression, Program, WhileStatement,
+    LogicalExpression, Program, TemplateLiteral, WhileStatement,
 };
 use oxc_ast_visit::{walk, Visit};
 use oxc_span::GetSpan;
@@ -71,6 +71,14 @@ impl<'a> Visit<'a> for OperatorVisitor<'_> {
     fn visit_do_while_statement(&mut self, it: &DoWhileStatement<'a>) {
         conditional::collect_predicate(self.path, self.source, it.test.span(), &mut self.sites);
         walk::walk_do_while_statement(self, it);
+    }
+
+    /// ADR-029: do not walk `${…}` expressions inside any TemplateLiteral
+    /// (tagged or untagged). Default `walk_template_literal` visits expressions;
+    /// skipping that walk drops junk arithmetic/equality/boolean/logical sites
+    /// from interpolations while leaving non-template operators untouched.
+    fn visit_template_literal(&mut self, _it: &TemplateLiteral<'a>) {
+        // Intentionally empty — do not call walk::walk_template_literal.
     }
 }
 

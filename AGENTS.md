@@ -68,8 +68,8 @@ flowchart LR
 | CLI flags / exit process | `src/adapters/inbound/cli/`, `src/cli.ts` |
 | Git targeting / excludes | `src/adapters/outbound/git/`, `src/domain/excludes.ts` |
 | Vitest session / RAM / map | `src/adapters/outbound/vitest/` |
-| Reports | `src/adapters/outbound/report/` |
-| Operators / disable / apply | `crates/puca-core/src/` |
+| Reports / File Summary table | `src/adapters/outbound/report/` (`StdioReport`, `formatFileSummaryTable`) |
+| Operators / disable / apply / TemplateLiteral skip | `crates/puca-core/src/` (`operators/mod.rs` `visit_template_literal`) |
 | NAPI surface | `crates/puca-binding/`, `src/adapters/outbound/napi/` |
 | Fixture oracle | `fixtures/loop/`, `test/e2e.loopFixture.test.ts` |
 

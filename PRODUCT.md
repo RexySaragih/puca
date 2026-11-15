@@ -79,10 +79,10 @@ flowchart TD
 | Capability | Behavior |
 | --- | --- |
 | Targeting | Default: git dirty `.ts`/`.tsx` vs HEAD (untracked ignored; stderr skip notice). `--include-untracked` adds untracked files. Override: `--mutate <glob>` (tree walk). Hard excludes never mutate. |
-| Mutator | Oxc (Rust) via NAPI: arithmetic, equality, boolean, logical, conditional predicates. Lazy byte-offset apply. |
+| Mutator | Oxc (Rust) via NAPI: arithmetic, equality, boolean, logical, conditional predicates. Lazy byte-offset apply. Phase 3.2: expressions inside any `TemplateLiteral` (`${…}`, tagged or untagged) are never mutated — no opt-in flag. |
 | Disable | `// puca-disable-next-line`, `// puca-disable` |
 | Session | One Vitest keep-alive by default (`--workers 1` / omit). Vite RAM plugin; sequential mutants; outer timeout + respawn. `--workers N` (N≥2) opts into a fork pool of isolated keep-alives (Phase 2). `--verbose` lists files, mutators, disable omissions, respawns/recycles. |
-| Report | Terminal (`file:line:col` + `-`/`+` lines + five buckets); optional mutation-testing-report-schema JSON (`puca/schema/mutation-report.json`) |
+| Report | Terminal (`file:line:col` + `-`/`+` lines + five buckets + Phase 3.2 `── File Summary ──` per-file Kill% table after Summary on scored runs); optional mutation-testing-report-schema JSON (`puca/schema/mutation-report.json`) |
 | Exits | 0 / 1 / 2 as in [README.md](./README.md) |
 
 Package name: `puca` (unscoped). Binary: `puca`. **Not published** this cycle — consumers build from source (`npm run build`).
@@ -100,10 +100,12 @@ flowchart LR
 ## Explicit non-goals
 
 - Jest, `node:test` / `register()` adapters
-- V8 coverage maps, warm worker pools, disk mutant cache
+- V8 coverage maps, warm worker pools, disk mutant cache (`.puca/cache.json` stays later / out of 3.2)
 - CFG / type-aware pruning, Stryker bake-off claims
 - HTML reporter, Browser Mode, CJS, Vue/Svelte/Angular SFC
-- Multi-project Vitest monorepos, mutating `.js`/`.mjs`
+- Multi-project Vitest monorepos (`--workspace`), mutating `.js`/`.mjs`
+- CI score gates (`--break-on-score`), SARIF
+- `--mutate-template-expressions` (template skip is unconditional in 3.2)
 - `puca.config.ts`
 - `@puca/*` npm scope, Windows as a release gate
 - **npm registry publish** of `puca` or `puca-<abi>`, and git `optionalDependencies` on unpublished platform names
@@ -136,11 +138,13 @@ Normative IDs (SC-*, REQ-*, ADR-*) live in `.planora/puca-phase-1-technical-solu
 
 | Family | Examples |
 | --- | --- |
-| ArithmeticOperator | `+`↔`-`, `*`↔`/`, `%`→`*` (no unary; string `+` still mutated) |
+| ArithmeticOperator | `+`↔`-`, `*`↔`/`, `%`→`*` (no unary; string `+` still mutated; **not** inside `` `${…}` ``) |
 | EqualityOperator | `===`↔`!==`, relational pairs |
 | BooleanLiteral | `true`↔`false` |
 | LogicalOperator | `&&`↔`\|\|` |
 | ConditionalExpression | `if` / `while` / `do-while` / ternary predicates → `true` and `false` (not `for` headers) |
+
+Template interpolations (tagged and untagged) are skipped unconditionally (ADR-029). File Summary Kill% is terminal presentation only and never changes exit codes (ADR-030).
 
 ---
 

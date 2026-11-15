@@ -178,6 +178,31 @@ describe("NapiMutatorEngine", () => {
     });
   });
 
+  describe("when source has TemplateLiteral interpolations (SC-321..323)", () => {
+    it("should skip untagged and tagged `${…}` expressions but keep non-template +", async () => {
+      const engine = new NapiMutatorEngine(loadPucaBinding(repoRoot));
+      const source =
+        "const s = `x ${a + b}`; tag`${flag}`; const n = a + b; const lit = \"a\" + \"b\";\n";
+      const file = toAbsolutePath(path.join(repoRoot, "template-skip.ts"));
+
+      const found = await engine.discover(file, source);
+      const arithmetic = found.sites.filter(
+        (site) => site.mutatorName === "ArithmeticOperator",
+      );
+
+      expect(arithmetic).toHaveLength(2);
+      for (const site of arithmetic) {
+        expect(site.original).toBe("+");
+        expect(site.replacement).toBe("-");
+        const sliced = utf8ByteSlice(source, site.startOffset, site.endOffset);
+        expect(sliced).toBe("+");
+        // Offsets must land on the non-template operators, not inside `${…}`.
+        expect(site.startOffset).toBeGreaterThan(source.indexOf("const n"));
+      }
+      expect(found.sites.every((site) => site.original !== "flag")).toBe(true);
+    });
+  });
+
   describe("when source is toggleLabel's outer ternary", () => {
     it("should replace only the predicate, not the whole ConditionalExpression", async () => {
       const engine = new NapiMutatorEngine(loadPucaBinding(repoRoot));

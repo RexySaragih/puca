@@ -112,6 +112,61 @@ fn ac3_string_literal_addition_is_still_a_site() {
 }
 
 #[test]
+fn untagged_template_interpolation_emits_no_sites() {
+    // Given — untagged template with arithmetic and boolean interpolations (SC-321)
+    let source = "const s = `x ${a + b}`; const t = `${flag}`;";
+
+    // When
+    let sites = discover("tpl.ts", source).expect("discover");
+
+    // Then — no sites from expressions inside `${…}`
+    assert!(
+        sites.is_empty(),
+        "SC-321: untagged template interpolations must yield 0 sites, got {sites:?}"
+    );
+}
+
+#[test]
+fn tagged_template_interpolation_emits_no_sites() {
+    // Given — tagged template shares the same TemplateLiteral visitor (SC-322)
+    let source = "tag`${a + b}`";
+
+    // When
+    let sites = discover("tagged.ts", source).expect("discover");
+
+    // Then
+    assert!(
+        sites.is_empty(),
+        "SC-322: tagged template inner expressions must yield 0 sites, got {sites:?}"
+    );
+}
+
+#[test]
+fn non_template_addition_still_discovers_beside_template() {
+    // Given — template junk next to a real non-template `+` (SC-323 / A10)
+    let source = "const s = `x ${a + b}`; const n = a + b; const lit = \"a\" + \"b\";";
+
+    // When
+    let sites = discover("mixed.ts", source).expect("discover");
+
+    // Then — only the two non-template ArithmeticOperator sites
+    let arithmetic: Vec<&Site> = sites
+        .iter()
+        .filter(|s| s.mutator_name == "ArithmeticOperator")
+        .collect();
+    assert_eq!(
+        arithmetic.len(),
+        2,
+        "SC-323: non-template `a + b` and string `+` must still discover, got {sites:?}"
+    );
+    for site in &arithmetic {
+        let sliced = &source[site.start_offset as usize..site.end_offset as usize];
+        assert_eq!(sliced, "+");
+        assert_eq!(site.replacement, "-");
+    }
+}
+
+#[test]
 fn unary_plus_minus_are_not_arithmetic_sites() {
     let sites = discover("unary.ts", "+a; -b;").expect("discover");
     assert!(

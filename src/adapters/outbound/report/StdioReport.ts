@@ -6,6 +6,7 @@ import type {
   SessionStartInfo,
 } from "../../../application/ports/outbound/ReportPort.js";
 import type { Mutant, SessionResult } from "../../../domain/mutant.js";
+import { formatFileSummaryTable } from "./formatFileSummaryTable.js";
 
 const DETAIL_STATUSES = new Set(["Survived", "Timeout", "RuntimeError"]);
 const DETAIL_ORIGINAL_MAX = 80;
@@ -87,6 +88,10 @@ export class StdioReport implements ReportPort {
     }
 
     this.stdout.write(`${formatSummary(result.statuses)}\n`);
+    // ADR-030 / SC-325: File Summary only when scored statuses exist.
+    if (result.statuses.length >= 1) {
+      this.stdout.write(`${formatFileSummaryTable(result.statuses, this.cwd)}\n`);
+    }
     if (result.verboseFooter != null && result.verboseFooter.length > 0) {
       this.stderr.write(`${result.verboseFooter}\n`);
     }

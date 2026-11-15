@@ -116,6 +116,14 @@ describe("CLI terminal report and exit codes", () => {
       expect(parseArgs([]).workers).toBe(1);
     });
 
+    it("should refuse unknown Phase 3.2 non-flags (SC-327)", () => {
+      expect(() => parseArgs(["--mutate-template-expressions"])).toThrow(
+        /Unknown argument/,
+      );
+      expect(() => parseArgs(["--break-on-score"])).toThrow(/Unknown argument/);
+      expect(() => parseArgs(["--file-summary"])).toThrow(/Unknown argument/);
+    });
+
     it("should refuse invalid --workers (AC3)", async () => {
       const { runCli } = await import("../src/cli.js");
       const cases: Array<{ argv: string[]; match: RegExp }> = [
@@ -397,6 +405,163 @@ describe("CLI terminal report and exit codes", () => {
       expect(out.text()).toContain(NO_FILES_TO_MUTATE_MESSAGE);
       expect(out.text()).toMatch(/Killed: 0/);
       expect(out.text()).toMatch(/No Coverage: 0/);
+      expect(out.text()).not.toContain("── File Summary ──");
+    });
+  });
+
+  describe("File Summary table (SC-324 / SC-325)", () => {
+    it("should print Summary then File Summary with sorted paths and bucket counts", async () => {
+      // Given — two files; sort order must be ascending by relative path
+      const cwd = "/tmp/puca-file-summary";
+      const fileB = toAbsolutePath(path.join(cwd, "src/b.ts"));
+      const fileA = toAbsolutePath(path.join(cwd, "src/a.ts"));
+      const statuses: Mutant[] = [
+        {
+          site: siteFor(cwd, fileB, 1, "ArithmeticOperator", "+", "-"),
+          status: "Timeout",
+        },
+        {
+          site: siteFor(cwd, fileB, 5, "BooleanLiteral", "true", "false"),
+          status: "NoCoverage",
+        },
+        {
+          site: siteFor(cwd, fileA, 1, "ArithmeticOperator", "+", "-"),
+          status: "Killed",
+          killedBy: "t",
+        },
+        {
+          site: siteFor(cwd, fileA, 3, "ArithmeticOperator", "-", "+"),
+          status: "Killed",
+          killedBy: "t",
+        },
+        {
+          site: siteFor(cwd, fileA, 5, "ArithmeticOperator", "*", "/"),
+          status: "Killed",
+          killedBy: "t",
+        },
+        {
+          site: siteFor(cwd, fileA, 7, "EqualityOperator", "===", "!=="),
+          status: "Survived",
+        },
+      ];
+      const result: SessionResult = { statuses, exitCode: 1 };
+      const out = captureStream();
+      const err = captureStream();
+      const report = new StdioReport({
+        cwd,
+        stdout: out.stream,
+        stderr: err.stream,
+      });
+
+      // When
+      await report.writeTerminal(result);
+
+      // Then
+      const text = out.text();
+      const summaryIdx = text.indexOf("── Summary ──");
+      const fileSummaryIdx = text.indexOf("── File Summary ──");
+      expect(summaryIdx).toBeGreaterThanOrEqual(0);
+      expect(fileSummaryIdx).toBeGreaterThan(summaryIdx);
+      expect(text).toContain("File");
+      expect(text).toContain("Total");
+      expect(text).toContain("Killed");
+      expect(text).toContain("Survived");
+      expect(text).toContain("Timeout");
+      expect(text).toContain("NoCov");
+      expect(text).toContain("Error");
+      expect(text).toContain("Kill%");
+      const table = text.slice(fileSummaryIdx);
+      expect(table).toMatch(/src\/a\.ts\s+4\s+3\s+1\s+0\s+0\s+0\s+75%/);
+      expect(table).toMatch(/src\/b\.ts\s+2\s+0\s+0\s+1\s+1\s+0\s+-/);
+      const aIdx = table.indexOf("src/a.ts");
+      const bIdx = table.indexOf("src/b.ts");
+      expect(aIdx).toBeGreaterThan(-1);
+      expect(bIdx).toBeGreaterThan(aIdx);
+      expect(result.exitCode).toBe(1);
+      expect(err.text()).toBe("");
+    });
+
+    it("should render Kill% as `-` when only NoCoverage mutants exist for a file", async () => {
+      const cwd = "/tmp/puca-file-summary-nocov";
+      const file = toAbsolutePath(path.join(cwd, "src/uncovered.ts"));
+      const out = captureStream();
+      const report = new StdioReport({ cwd, stdout: out.stream });
+
+      await report.writeTerminal({
+        statuses: [
+          {
+            site: siteFor(cwd, file, 1, "ArithmeticOperator", "+", "-"),
+            status: "NoCoverage",
+          },
+          {
+            site: siteFor(cwd, file, 4, "BooleanLiteral", "true", "false"),
+            status: "NoCoverage",
+          },
+        ],
+        exitCode: 0,
+      });
+
+      const text = out.text();
+      expect(text).toContain("── File Summary ──");
+      expect(text).toMatch(/src\/uncovered\.ts\s+2\s+0\s+0\s+0\s+2\s+0\s+-/);
+    });
+
+    it("should omit File Summary on idle empty statuses and pre-score refuse", async () => {
+      const idleOut = captureStream();
+      const refuseOut = captureStream();
+      const refuseErr = captureStream();
+
+      await new StdioReport({
+        cwd: "/tmp",
+        stdout: idleOut.stream,
+      }).writeTerminal({
+        statuses: [],
+        exitCode: 0,
+        message: NO_FILES_TO_MUTATE_MESSAGE,
+      });
+
+      await new StdioReport({
+        cwd: "/tmp",
+        stdout: refuseOut.stream,
+        stderr: refuseErr.stream,
+      }).writeTerminal({
+        statuses: [],
+        exitCode: 2,
+        message: "Not a git repository. Pass --mutate <glob> to specify files.",
+      });
+
+      expect(idleOut.text()).not.toContain("── File Summary ──");
+      expect(refuseOut.text()).not.toContain("── File Summary ──");
+      expect(refuseErr.text()).not.toContain("── File Summary ──");
+    });
+
+    it("should keep verbose footer on stderr separate from File Summary stdout", async () => {
+      const cwd = "/tmp/puca-file-summary-verbose";
+      const file = toAbsolutePath(path.join(cwd, "src/a.ts"));
+      const out = captureStream();
+      const err = captureStream();
+      const report = new StdioReport({
+        cwd,
+        stdout: out.stream,
+        stderr: err.stream,
+      });
+
+      await report.writeTerminal({
+        statuses: [
+          {
+            site: siteFor(cwd, file, 1, "ArithmeticOperator", "+", "-"),
+            status: "Killed",
+            killedBy: "t",
+          },
+        ],
+        exitCode: 0,
+        verboseFooter: "── Verbose ──\nrespawns: 0",
+      });
+
+      expect(out.text()).toContain("── File Summary ──");
+      expect(out.text()).not.toContain("── Verbose ──");
+      expect(err.text()).toContain("── Verbose ──");
+      expect(err.text()).not.toContain("── File Summary ──");
     });
   });
 

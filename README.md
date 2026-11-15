@@ -125,6 +125,16 @@ Realtime while scoring (not only a dump at the end):
   ```
 - **Killed / NoCoverage** — compact stderr progress (`[45/134] KILLED … K:40 S:3 …`) so the run stays alive without flooding diffs
 - Final `── Summary ──` five-bucket counts
+- Then `── File Summary ──` (scored runs only; omitted on idle/refuse with empty statuses):
+
+  ```text
+  ── File Summary ──
+  File                  Total  Killed  Survived  Timeout  NoCov  Error  Kill%
+  src/a.ts                  4       3         1        0      0      0    75%
+  src/b.ts                  2       0         0        1      1      0     -
+  ```
+
+  Kill% = `Killed / (Killed + Survived)` as an integer percent (`-` when that denominator is 0). Informational only — does not change exit codes. Expressions inside template literals (`` `${…}` ``, tagged or untagged) are never mutated.
 - Default git targeting that skips untracked `.ts` / `.tsx` prints: `ℹ N untracked files skipped…`
 - `--verbose` adds selected files, mutator histogram, disable-omit count, and Vitest respawns
 

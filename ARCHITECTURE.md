@@ -97,7 +97,7 @@ Composition root is the **only** place that chooses prod vs fake adapters. Do no
 | `TestRunnerPort` | Session, reverse map, baseline, runRelated, respawn (**unexported**) | `VitestTestRunner` | `FakeTestRunner` |
 | `SourceLocatorPort` | Candidate files | `GitDiffLocator` | `InMemorySourceLocator` |
 | `WorkspaceFilesPort` | `readUtf8` / `exists` / `isUnderCwd` | `NodeWorkspaceFiles` | `InMemoryFiles` |
-| `ReportPort` | Terminal (+ optional JSON) | `StdioReport` + `SchemaJsonFile` | `RecordingReport` |
+| `ReportPort` | Terminal (+ optional JSON); File Summary is StdioReport-only (ADR-030), not a port method | `StdioReport` + `SchemaJsonFile` | `RecordingReport` |
 
 Clock / IDs are composition helpers, not ports (A12).
 
@@ -153,6 +153,7 @@ Site id: `{relpath}:{startOffset}:{mutatorName}:{replacement}`.
 - Parse with oxc; `.ts` vs `.tsx` `SourceType` from extension.
 - Sites are **UTF-8 byte offsets** into the original source — discovery does not serialize mutants (ADR-002).
 - Operators: arithmetic, equality, boolean, logical, conditional predicates (not `for` headers).
+- **ADR-029:** `visit_template_literal` does not walk `${…}` expressions (tagged and untagged); non-template operators including string `+` still discover.
 - `apply` splices `replacement` over `[start, end)` — no full AST reprint.
 - Disable comments are line-oriented `//` only.
 
@@ -191,6 +192,8 @@ Missing `.node` after clone → exit 2 until `npm run build`.
 | ADR-010 | `TestRunnerPort` unexported; no `register()` |
 | ADR-011 | Exit 0/1/2 + A6 idle vs refuse |
 | ADR-012 | Oxc, not Babel/tsc/SWC |
+| ADR-029 | Skip all TemplateLiteral `${…}` expressions unconditionally; no CLI flag |
+| ADR-030 | File Summary table is StdioReport presentation only; Kill% not domain; ReportPort unchanged |
 
 ---
 
