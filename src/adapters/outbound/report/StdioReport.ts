@@ -7,9 +7,10 @@ import type {
 } from "../../../application/ports/outbound/ReportPort.js";
 import type { Mutant, SessionResult } from "../../../domain/mutant.js";
 import { formatFileSummaryTable } from "./formatFileSummaryTable.js";
+import { formatMutationLineDiff } from "./formatMutationContext.js";
+import { SourceTextCache } from "./sourceTextCache.js";
 
 const DETAIL_STATUSES = new Set(["Survived", "Timeout", "RuntimeError"]);
-const DETAIL_ORIGINAL_MAX = 80;
 
 export interface StdioReportOptions {
   readonly cwd?: string;
@@ -19,12 +20,14 @@ export interface StdioReportOptions {
 
 /**
  * Terminal reporter: realtime mutant lines + five-bucket summary.
- * Survived/Timeout/Error get status + mutator + diff; Killed/NoCoverage stay compact.
+ * Survived/Timeout/Error get status + mutator + line-context diff;
+ * Killed/NoCoverage stay compact (with a short before→after hint).
  */
 export class StdioReport implements ReportPort {
   private readonly cwd: string;
   private readonly stdout: NodeJS.WritableStream;
   private readonly stderr: NodeJS.WritableStream;
+  private readonly sources = new SourceTextCache();
   private streamedMutants = false;
   private progressDirty = false;
 
@@ -53,13 +56,15 @@ export class StdioReport implements ReportPort {
     this.clearProgressLine();
 
     if (DETAIL_STATUSES.has(mutant.status)) {
-      this.stdout.write(`${formatDetailBlock(mutant, this.cwd, progress)}\n`);
+      this.stdout.write(
+        `${formatDetailBlock(mutant, this.cwd, this.sources, progress)}\n`,
+      );
       return;
     }
 
     // Compact live progress for Killed / NoCoverage so the run feels alive
     // without flooding Survived-style diff blocks.
-    const line = formatCompactProgress(mutant, this.cwd, progress);
+    const line = formatCompactProgress(mutant, this.cwd, this.sources, progress);
     if (this.isStderrTty()) {
       this.stderr.write(`\r${line}`);
       this.progressDirty = true;
@@ -83,7 +88,9 @@ export class StdioReport implements ReportPort {
         if (!DETAIL_STATUSES.has(mutant.status)) {
           continue;
         }
-        this.stdout.write(`${formatDetailBlock(mutant, this.cwd)}\n`);
+        this.stdout.write(
+          `${formatDetailBlock(mutant, this.cwd, this.sources)}\n`,
+        );
       }
     }
 
@@ -117,31 +124,38 @@ export class StdioReport implements ReportPort {
 function formatDetailBlock(
   mutant: Mutant,
   cwd: string,
+  sources: SourceTextCache,
   progress?: MutantProgress,
 ): string {
   const rel = relativePath(cwd, mutant.site.file);
-  const original = truncateTokenAware(
-    collapseWhitespace(mutant.site.original),
-    DETAIL_ORIGINAL_MAX,
-  );
-  const replacement = collapseWhitespace(mutant.site.replacement);
+  const diff = formatMutationLineDiff(sources.get(mutant.site.file), mutant.site);
   const status = statusLabel(mutant.status);
   const head = progress != null
     ? `[${String(progress.index)}/${String(progress.total)}] ${status}  ${mutant.site.mutatorName}  ${rel}:${String(mutant.site.line)}:${String(mutant.site.column)}`
     : `${status}  ${mutant.site.mutatorName}  ${rel}:${String(mutant.site.line)}:${String(mutant.site.column)}`;
-  return `${head}\n- ${original}\n+ ${replacement}`;
+  return `${head}\n- ${diff.before}\n+ ${diff.after}`;
 }
 
 function formatCompactProgress(
   mutant: Mutant,
   cwd: string,
+  sources: SourceTextCache,
   progress: MutantProgress,
 ): string {
   const rel = relativePath(cwd, mutant.site.file);
   const status = statusLabel(mutant.status);
   const buckets = formatBucketShort(progress.counts);
   const loc = `${rel}:${String(mutant.site.line)}:${String(mutant.site.column)}`;
-  return `[${String(progress.index)}/${String(progress.total)}] ${status}  ${mutant.site.mutatorName}  ${loc}  ${buckets}`;
+  const diff = formatMutationLineDiff(sources.get(mutant.site.file), mutant.site);
+  const hint = compactHint(diff.before, diff.after);
+  return `[${String(progress.index)}/${String(progress.total)}] ${status}  ${mutant.site.mutatorName}  ${loc}  ${hint}  ${buckets}`;
+}
+
+function compactHint(before: string, after: string): string {
+  const max = 36;
+  const a = before.length > max ? `${before.slice(0, max)}…` : before;
+  const b = after.length > max ? `${after.slice(0, max)}…` : after;
+  return `${a} → ${b}`;
 }
 
 function statusLabel(status: Mutant["status"]): string {
@@ -165,20 +179,6 @@ function formatBucketShort(counts: BucketCounts): string {
 
 function relativePath(cwd: string, file: string): string {
   return path.relative(cwd, file).replace(/\\/g, "/") || file;
-}
-
-function collapseWhitespace(text: string): string {
-  return text.replace(/\s+/g, " ").trim();
-}
-
-function truncateTokenAware(text: string, maxChars: number): string {
-  if (text.length <= maxChars) {
-    return text;
-  }
-  const slice = text.slice(0, maxChars);
-  const lastSpace = slice.lastIndexOf(" ");
-  const cut = lastSpace >= Math.floor(maxChars / 2) ? slice.slice(0, lastSpace) : slice;
-  return `${cut}…`;
 }
 
 function formatSummary(statuses: readonly Mutant[]): string {

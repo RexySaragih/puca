@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { ReportPort } from "../../../application/ports/outbound/ReportPort.js";
 import type { Mutant, SessionResult } from "../../../domain/mutant.js";
+import { formatMutationLineDiff } from "./formatMutationContext.js";
+import { SourceTextCache } from "./sourceTextCache.js";
 
 /**
  * Self-contained offline HTML mutation report (ADR-034).
@@ -23,10 +25,13 @@ export class HtmlFile implements ReportPort {
 }
 
 function renderHtmlDocument(result: SessionResult, cwd: string): string {
+  const sources = new SourceTextCache();
   const payload = {
     exitCode: result.exitCode,
     message: result.message ?? null,
-    statuses: result.statuses.map((mutant) => serializeMutant(mutant, cwd)),
+    statuses: result.statuses.map((mutant) =>
+      serializeMutant(mutant, cwd, sources),
+    ),
   };
   const embedded = JSON.stringify(payload).replace(/</g, "\\u003c");
 
@@ -262,7 +267,8 @@ a { color: var(--accent); }
     if (activeStatus !== "ALL" && m.status !== activeStatus) return false;
     if (activeFile !== "ALL" && m.file !== activeFile) return false;
     if (!query) return true;
-    var hay = (m.file + " " + m.mutatorName + " " + m.id + " " + m.original + " " + m.replacement).toLowerCase();
+    var hay = (m.file + " " + m.mutatorName + " " + m.id + " " + m.original + " " +
+      m.replacement + " " + m.before + " " + m.after).toLowerCase();
     return hay.indexOf(query) !== -1;
   }
 
@@ -281,8 +287,10 @@ a { color: var(--accent); }
         '<span class="mutator">' + escapeHtml(m.mutatorName) + "</span>" +
         '<span class="meta">' + escapeHtml(m.file) + ":" + m.line + ":" + m.column + "</span>" +
         "</div>" +
-        '<div class="diff"><span class="minus">- ' + escapeHtml(m.original) +
-        '</span><span class="plus">+ ' + escapeHtml(m.replacement) + "</span></div>" +
+        '<div class="diff"><span class="minus">- ' + escapeHtml(m.before) +
+        '</span><span class="plus">+ ' + escapeHtml(m.after) + "</span></div>" +
+        '<div class="meta">token: ' + escapeHtml(m.original) + " → " +
+        escapeHtml(m.replacement) + "</div>" +
         "</article>";
     }
     host.innerHTML = html;
@@ -305,7 +313,11 @@ a { color: var(--accent); }
 `;
 }
 
-function serializeMutant(mutant: Mutant, cwd: string): {
+function serializeMutant(
+  mutant: Mutant,
+  cwd: string,
+  sources: SourceTextCache,
+): {
   id: string;
   status: string;
   file: string;
@@ -314,8 +326,14 @@ function serializeMutant(mutant: Mutant, cwd: string): {
   mutatorName: string;
   original: string;
   replacement: string;
+  before: string;
+  after: string;
   killedBy?: string;
 } {
+  const diff = formatMutationLineDiff(
+    sources.get(mutant.site.file),
+    mutant.site,
+  );
   return {
     id: mutant.site.id,
     status: mutant.status,
@@ -325,6 +343,8 @@ function serializeMutant(mutant: Mutant, cwd: string): {
     mutatorName: mutant.site.mutatorName,
     original: mutant.site.original,
     replacement: mutant.site.replacement,
+    before: diff.before,
+    after: diff.after,
     killedBy: mutant.killedBy,
   };
 }
