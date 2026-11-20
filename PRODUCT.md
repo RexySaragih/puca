@@ -74,7 +74,7 @@ flowchart TD
 
 ---
 
-## Feature roadmap (through Phase 3.5 / v0.2.1)
+## Feature roadmap (through Phase 3.6 / v0.3.0)
 
 | Phase | Shipped | Deferred |
 | --- | --- | --- |
@@ -85,14 +85,15 @@ flowchart TD
 | **3.3** | `--break-on-score`, `--fail-on-no-coverage`, `--sarif` | — |
 | **3.4** | `--html`, `--cache`, `--workspace`, `--runner jest` | Jest multi-worker; CDN/Stryker UI HTML |
 | **3.5** (`v0.2.1`) | Discovery noise suppression + operator-specific disable directives (ADR-039) | block `/* puca-disable */`; `oxc_semantic`; npm publish |
+| **3.6** (`v0.3.0`) | Hunk targeting, skip honesty, UnaryOperator `!`, string-`+` skip, Jest related-map hop 8 | npm publish; Jest multi-worker; `puca.config.ts` |
 | **4** | — | npm publish / OIDC / `optionalDependencies` prebuilds |
 
-## What ships (through Phase 3.5)
+## What ships (through Phase 3.6)
 
 | Capability | Behavior |
 | --- | --- |
-| Targeting | Default: git dirty `.ts`/`.tsx`/`.js`/`.jsx`/`.mjs`/`.cjs` vs HEAD (untracked ignored; stderr skip notice). `--include-untracked` adds untracked files. Override: `--mutate <glob>` (tree walk). Hard excludes never mutate. |
-| Mutator | Oxc (Rust) via NAPI: arithmetic, equality, boolean, logical, conditional predicates. Lazy byte-offset apply. Phase 3.2: expressions inside any `TemplateLiteral` (`${…}`, tagged or untagged) are never mutated — no opt-in flag. Phase 3.5: quiet skips for `console.*` / `logger.*` call args and closed trivial arithmetic (`x+0`, `x*1`, …); `0 - x` and `x + ""` stay discoverable. |
+| Targeting | Default: git **hunks** vs HEAD (`git diff -U0 HEAD`; untracked ignored; stderr skip notice). `--full-file` scores whole dirty files. `--include-untracked` adds untracked files (whole-file). Override: `--mutate <glob>` (tree walk, whole-file). Hard excludes never mutate. |
+| Mutator | Oxc (Rust) via NAPI: arithmetic, equality, boolean, logical, unary `!`, conditional predicates (Identifier / `!id`). Lazy byte-offset apply. Phase 3.2: expressions inside any `TemplateLiteral` (`${…}`, tagged or untagged) are never mutated — no opt-in flag. Phase 3.5: quiet skips for `console.*` / `logger.*` call args and closed trivial arithmetic (`x+0`, `x*1`, …); `0 - x` and `x + ""` stay discoverable. Non-empty string `+` is omitted. |
 | Disable | `// puca-disable-next-line` (all mutators on next line), `// puca-disable-next-line OpA, OpB` (named only), `// puca-disable` (rest-of-file). Unknown Op tokens warn on stderr; known tokens still apply. Block comments are ignored. |
 | Session | One Vitest keep-alive by default (`--workers 1` / omit). Vite RAM plugin; sequential mutants; outer timeout + respawn. `--workers N` (N≥2) opts into a fork pool of isolated keep-alives (Phase 2). `--verbose` lists files, mutators, suppression summary (directive vs heuristic), respawns/recycles. |
 | Report | Terminal (`file:line:col` + `-`/`+` lines + five buckets + `── File Summary ──` with optional `Disabled` column when suppressions > 0); optional unscoped `mutation-testing-report-schema` JSON (`--json`); Survived-only SARIF (`--sarif`); native offline HTML (`--html`) — **no** `@stryker-mutator/*`. JSON/HTML/SARIF do not gain Disabled fields. |
@@ -106,8 +107,11 @@ flowchart TD
 
 | Flag | Kind | Default |
 | --- | --- | --- |
-| `--mutate <glob>` | path glob | git dirty `.ts`/`.tsx`/`.js`/`.jsx`/`.mjs`/`.cjs` |
+| `--mutate <glob>` | path glob | git hunks vs HEAD |
 | `--include-untracked` | switch | off |
+| `--full-file` | switch | off (hunk filter on) |
+| `--help` / `-h` | switch | prints usage, exit 0 |
+| `--version` / `-V` | switch | prints package version, exit 0 |
 | `--timeout <ms>` | int > 0 | `max(testTimeout+2000, 7000)` |
 | `--workers <n>` | int ≥ 1 | `1` |
 | `--verbose` | switch | off |
@@ -128,7 +132,7 @@ flowchart TD
 
 Score = `round(100 * Killed / (Killed + Survived))`; denom 0 → N/A (score gate does not fail alone). Survived is never suppressed by a passing score. Workspace aggregates worst-of `2 > 1 > 0`.
 
-Package name: `puca` (unscoped). Binary: `puca`. **Not published to npm** through Phase 3 — consumers build from source (`npm run build`) or install **GitHub Release** tarballs (`puca-0.2.0.tgz` + `puca-<abi>-0.2.0.tgz`). npm registry publish is deferred to **Phase 4**.
+Package name: `puca` (unscoped). Binary: `puca`. **Not published to npm** through Phase 3 — consumers build from source (`npm run build`) or install **GitHub Release** tarballs (`puca-0.3.0.tgz` + `puca-<abi>-0.3.0.tgz`). npm registry publish is deferred to **Phase 4**.
 
 ```mermaid
 flowchart LR
@@ -156,7 +160,7 @@ flowchart LR
 
 ### Phase 3 distribution (not a non-goal)
 
-GHA packs **GitHub Release** tarballs (`puca-0.2.0.tgz` + matching `puca-<abi>-0.2.0.tgz`) so a rust-free host can install the CLI without `rustc`. Contributors still source-build with `npm run build`. Nothing is published to the npm registry through Phase 3 (ADR-038).
+GHA packs **GitHub Release** tarballs (`puca-0.3.0.tgz` + matching `puca-<abi>-0.3.0.tgz`) so a rust-free host can install the CLI without `rustc`. Contributors still source-build with `npm run build`. Nothing is published to the npm registry through Phase 3 (ADR-038).
 
 ---
 
@@ -182,11 +186,12 @@ Normative IDs (SC-*, REQ-*, ADR-*) live in `.planora/puca-phase-1-technical-solu
 
 | Family | Examples |
 | --- | --- |
-| ArithmeticOperator | `+`↔`-`, `*`↔`/`, `%`→`*` (no unary; string `+` still mutated; **not** inside `` `${…}` ``) |
+| ArithmeticOperator | `+`↔`-`, `*`↔`/`, `%`→`*` (no unary; non-empty string/`template` `+` omitted; `x + ""` remains; **not** inside `` `${…}` ``) |
 | EqualityOperator | `===`↔`!==`, relational pairs |
 | BooleanLiteral | `true`↔`false` |
 | LogicalOperator | `&&`↔`\|\|` |
-| ConditionalExpression | `if` / `while` / `do-while` / ternary predicates → `true` and `false` (not `for` headers) |
+| UnaryOperator | `!expr` → drop `!` (not unary `+`/`-`) |
+| ConditionalExpression | `if` / `while` / `do-while` / ternary **Identifier** or `!id` predicates → `true` and `false` (not `for` headers; not compound tests) |
 
 Template interpolations (tagged and untagged) are skipped unconditionally (ADR-029). File Summary Kill% is terminal presentation only and never changes exit codes (ADR-030).
 

@@ -37,22 +37,41 @@ export interface PucaBinding {
   apply(source: string, site: SiteDto): string;
 }
 
+/** ABIs packed by GitHub Releases / `package.json` `napi.targets`. */
+export const SUPPORTED_ABIS = [
+  "darwin-arm64",
+  "darwin-x64",
+  "linux-x64-gnu",
+  "win32-x64-msvc",
+] as const;
+
+export type SupportedAbi = (typeof SUPPORTED_ABIS)[number];
+
 /**
  * Resolve host platform ABI suffix used by `napi build --platform`
  * (e.g. darwin-arm64, linux-x64-gnu). GNU-only linux suffixes this cycle (ADR-022).
  */
 export function hostPlatformAbi(): string {
-  const { platform, arch } = process;
-  if (platform === "darwin") {
-    return arch === "arm64" ? "darwin-arm64" : "darwin-x64";
+  return platformAbi(process.platform, process.arch);
+}
+
+export function platformAbi(platform: string, arch: string): SupportedAbi {
+  if (platform === "darwin" && arch === "arm64") {
+    return "darwin-arm64";
   }
-  if (platform === "linux") {
-    return arch === "arm64" ? "linux-arm64-gnu" : "linux-x64-gnu";
+  if (platform === "darwin" && arch === "x64") {
+    return "darwin-x64";
   }
-  if (platform === "win32") {
-    return arch === "arm64" ? "win32-arm64-msvc" : "win32-x64-msvc";
+  if (platform === "linux" && arch === "x64") {
+    return "linux-x64-gnu";
   }
-  throw new Error(`Unsupported platform for puca-binding: ${platform}-${arch}`);
+  if (platform === "win32" && arch === "x64") {
+    return "win32-x64-msvc";
+  }
+  throw new Error(
+    `Unsupported platform for puca-binding: ${platform}-${arch}. ` +
+      `Supported ABIs: ${SUPPORTED_ABIS.join(", ")}.`,
+  );
 }
 
 function packageRootFromThisModule(): string {
@@ -82,7 +101,7 @@ export function formatMissingBindingMessage(abi: string): string {
     `Native Púca addon is missing for '${abi}'. ` +
     `Looked for puca-binding.${abi}.node (package root, crates/puca-binding) ` +
     `and package 'puca-${abi}'. ` +
-    `Install optional dependencies (do not use --no-optional) or run npm run build (requires a Rust toolchain).`
+    `Run npm run build (requires a Rust toolchain) or install the matching GitHub Release pair (puca + puca-${abi}).`
   );
 }
 

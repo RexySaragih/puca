@@ -93,7 +93,9 @@ describe("Git dirty / --mutate source locating", () => {
       const candidates = await locator.candidateFiles(tempDir);
 
       // Then
-      expect(candidates).toEqual([path.resolve(tempDir, "src/a.ts")]);
+      expect(candidates.map((c) => c.file)).toEqual([
+        path.resolve(tempDir, "src/a.ts"),
+      ]);
     });
   });
 
@@ -118,7 +120,9 @@ describe("Git dirty / --mutate source locating", () => {
 
       // Then
       expect(spawnImpl).not.toHaveBeenCalled();
-      expect(candidates).toEqual([path.resolve(tempDir, "src/a.ts")]);
+      expect(candidates.map((c) => c.file)).toEqual([
+        path.resolve(tempDir, "src/a.ts"),
+      ]);
     });
   });
 
@@ -208,7 +212,10 @@ describe("Git dirty / --mutate source locating", () => {
 
       // Then
       expect(withoutFlag).toEqual([]);
-      expect(withFlag).toEqual([path.resolve(tempDir, "src/fresh.ts")]);
+      expect(withFlag.map((c) => c.file)).toEqual([
+        path.resolve(tempDir, "src/fresh.ts"),
+      ]);
+      expect(withFlag[0]?.lineRanges).toBeUndefined();
     });
 
     it("should print a skip notice when default targeting ignores untracked files", async () => {
@@ -368,9 +375,71 @@ describe("Git dirty / --mutate source locating", () => {
       expect(spawnCalls[0]?.shell).toBe(false);
       expect(spawnCalls[1]?.shell).toBe(false);
       expect(spawnArgLists).toEqual([
-        ["diff", "--name-only", "HEAD"],
+        ["diff", "-U0", "HEAD"],
         ["ls-files", "--others", "--exclude-standard"],
       ]);
+    });
+  });
+
+  describe("when default git targeting has a one-line hunk (SC-505)", () => {
+    it("should attach lineRanges for the dirty line only", async () => {
+      await initGitRepo(tempDir);
+      await fs.mkdir(path.join(tempDir, "src"), { recursive: true });
+      await fs.writeFile(
+        path.join(tempDir, "src/calc.ts"),
+        "export function add(a: number, b: number): number {\n  return a + b;\n}\nexport function sub(a: number, b: number): number {\n  return a - b;\n}\n",
+      );
+      await runGit(tempDir, ["add", "src/calc.ts"]);
+      await runGit(tempDir, ["commit", "-m", "base"]);
+      await fs.writeFile(
+        path.join(tempDir, "src/calc.ts"),
+        "export function add(a: number, b: number): number {\n  return a - b;\n}\nexport function sub(a: number, b: number): number {\n  return a - b;\n}\n",
+      );
+
+      const files = new NodeWorkspaceFiles(tempDir);
+      const locator = new GitDiffLocator(files);
+      const candidates = await locator.candidateFiles(tempDir);
+
+      expect(candidates).toHaveLength(1);
+      expect(candidates[0]?.file).toBe(path.resolve(tempDir, "src/calc.ts"));
+      expect(candidates[0]?.lineRanges).toEqual([{ start: 2, end: 2 }]);
+    });
+
+    it("should omit lineRanges when --full-file is set", async () => {
+      await initGitRepo(tempDir);
+      await fs.mkdir(path.join(tempDir, "src"), { recursive: true });
+      await fs.writeFile(path.join(tempDir, "src/a.ts"), "export const a = 1;\n");
+      await runGit(tempDir, ["add", "src/a.ts"]);
+      await runGit(tempDir, ["commit", "-m", "base"]);
+      await fs.writeFile(path.join(tempDir, "src/a.ts"), "export const a = 2;\n");
+
+      const files = new NodeWorkspaceFiles(tempDir);
+      const locator = new GitDiffLocator(files);
+      const candidates = await locator.candidateFiles(
+        tempDir,
+        undefined,
+        false,
+        true,
+      );
+
+      expect(candidates.map((c) => c.file)).toEqual([
+        path.resolve(tempDir, "src/a.ts"),
+      ]);
+      expect(candidates[0]?.lineRanges).toBeUndefined();
+    });
+
+    it("should skip deleted dirty files via exists (SC-502)", async () => {
+      await initGitRepo(tempDir);
+      await fs.mkdir(path.join(tempDir, "src"), { recursive: true });
+      await fs.writeFile(path.join(tempDir, "src/gone.ts"), "export const g = 1;\n");
+      await runGit(tempDir, ["add", "src/gone.ts"]);
+      await runGit(tempDir, ["commit", "-m", "base"]);
+      await fs.rm(path.join(tempDir, "src/gone.ts"));
+
+      const files = new NodeWorkspaceFiles(tempDir);
+      const locator = new GitDiffLocator(files);
+      const candidates = await locator.candidateFiles(tempDir);
+      expect(candidates).toEqual([]);
     });
   });
 });

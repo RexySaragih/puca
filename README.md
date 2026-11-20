@@ -63,13 +63,15 @@ The binary entry is `dist/cli.js` (`package.json` `bin.puca`). Local harnesses t
 
 ### Install from GitHub Release tarballs (Phase 3 distribution, rust-free)
 
-Tag pushes (`v*`) run [`.github/workflows/release.yml`](./.github/workflows/release.yml): a matrix builds native addons for `darwin-arm64`, `darwin-x64`, `linux-x64-gnu`, and `win32-x64-msvc`, packs `puca-0.2.0.tgz` plus `puca-<abi>-0.2.0.tgz`, smoke-tests rust-free installs, and uploads those tarballs to a **GitHub Release**. There is **no** `npm publish`, **no** `NPM_TOKEN`, and **no** OIDC trusted-publishing step in Phase 3.
+Tag pushes (`v*`) run [`.github/workflows/release.yml`](./.github/workflows/release.yml): a matrix builds native addons for `darwin-arm64`, `darwin-x64`, `linux-x64-gnu`, and `win32-x64-msvc`, packs `puca-0.3.0.tgz` plus `puca-<abi>-0.3.0.tgz`, smoke-tests rust-free installs, and uploads those tarballs to a **GitHub Release**. There is **no** `npm publish`, **no** `NPM_TOKEN`, and **no** OIDC trusted-publishing step in Phase 3.
 
-Download the matching pair from the [GitHub Releases](https://github.com/RexySaragih/puca/releases) page — root `puca-0.2.0.tgz` plus host `puca-<abi>-0.2.0.tgz` (for example `puca-darwin-arm64-0.2.0.tgz`). Install **both** into a workspace (not `npm install -g puca` from the registry):
+Download the matching pair from the [GitHub Releases](https://github.com/RexySaragih/puca/releases) page — root `puca-0.3.0.tgz` plus host `puca-<abi>-0.3.0.tgz` (for example `puca-darwin-arm64-0.3.0.tgz`). Install **both** into a workspace (not `npm install -g puca` from the registry):
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/RexySaragih/puca/v0.3.0/scripts/install-from-release.sh | bash
+# or:
 mkdir puca-install && cd puca-install
-npm install ./puca-0.2.0.tgz ./puca-darwin-arm64-0.2.0.tgz
+npm install ./puca-0.3.0.tgz ./puca-darwin-arm64-0.3.0.tgz
 ./node_modules/.bin/puca --mutate 'src/**/*.ts'
 ```
 
@@ -82,11 +84,17 @@ Phase 3 installs the abi tarball explicitly beside the root (not via git `option
 Run from a Vitest TypeScript project (or from `fixtures/loop` after build):
 
 ```bash
-# Default: mutate git-dirty .ts/.tsx/.js/.jsx/.mjs/.cjs vs HEAD (untracked ignored)
+# Default: mutate git-dirty hunks vs HEAD (untracked ignored)
 puca
 
 # Same default, plus untracked files (still honors .gitignore and hard excludes)
 puca --include-untracked
+
+# Score every site in dirty files (skip hunk filter)
+puca --full-file
+
+puca --help
+puca --version
 
 # Explicit glob (ignores git status; walks the tree so untracked files match)
 puca --mutate 'src/**/*.ts'
@@ -151,8 +159,8 @@ puca --workspace 'packages/*' --mutate 'src/**/*.ts' --break-on-score 75 --cache
 Install in CI from **GitHub Release** tarballs (not `npm install -g puca`):
 
 ```bash
-curl -fsSL -o puca.tgz "https://github.com/RexySaragih/puca/releases/download/v0.2.0/puca-0.2.0.tgz"
-curl -fsSL -o puca-abi.tgz "https://github.com/RexySaragih/puca/releases/download/v0.2.0/puca-linux-x64-gnu-0.2.0.tgz"
+curl -fsSL -o puca.tgz "https://github.com/RexySaragih/puca/releases/download/v0.3.0/puca-0.3.0.tgz"
+curl -fsSL -o puca-abi.tgz "https://github.com/RexySaragih/puca/releases/download/v0.3.0/puca-linux-x64-gnu-0.3.0.tgz"
 npm install ./puca.tgz ./puca-abi.tgz
 ./node_modules/.bin/puca --mutate 'src/**/*.ts' --break-on-score 80
 ```

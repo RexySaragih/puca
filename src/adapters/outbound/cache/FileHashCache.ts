@@ -11,7 +11,13 @@ import type { MutantStatus } from "../../../domain/mutant.js";
 /** Bump when on-disk entry/document shape is incompatible. */
 export const CACHE_SCHEMA_VERSION = 1;
 /** Bump when key formula or scoring semantics change (wipes prior hits). */
-export const CACHE_ENGINE_VERSION = "2";
+export const CACHE_ENGINE_VERSION = "3";
+
+const CACHEABLE_STATUSES: ReadonlySet<MutantStatus> = new Set([
+  "Killed",
+  "Survived",
+  "NoCoverage",
+]);
 
 const CACHE_DIR_NAME = ".puca";
 const CACHE_FILE_NAME = "cache.json";
@@ -61,6 +67,9 @@ export class FileHashCache implements CachePort {
   }
 
   set(key: string, entry: CachedMutantStatus): void {
+    if (!CACHEABLE_STATUSES.has(entry.status)) {
+      return;
+    }
     this.entries.set(key, {
       status: entry.status,
       ...(entry.killedBy != null ? { killedBy: entry.killedBy } : {}),
@@ -111,7 +120,8 @@ export class FileHashCache implements CachePort {
       }
       if (
         value.schemaVersion !== CACHE_SCHEMA_VERSION ||
-        !isMutantStatus(value.status)
+        !isMutantStatus(value.status) ||
+        !CACHEABLE_STATUSES.has(value.status)
       ) {
         continue;
       }

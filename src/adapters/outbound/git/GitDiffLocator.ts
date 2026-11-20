@@ -2,7 +2,11 @@ import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process"
 import fs from "node:fs/promises";
 import path from "node:path";
 import micromatch from "micromatch";
-import type { SourceLocatorPort } from "../../../application/ports/outbound/SourceLocatorPort.js";
+import type {
+  LineRange,
+  SourceCandidate,
+  SourceLocatorPort,
+} from "../../../application/ports/outbound/SourceLocatorPort.js";
 import type { WorkspaceFilesPort } from "../../../application/ports/outbound/WorkspaceFilesPort.js";
 import { isHardExcluded } from "../../../domain/excludes.js";
 import { toAbsolutePath, type AbsolutePath } from "../../../domain/mutant.js";
@@ -15,6 +19,9 @@ import {
 /** Eligible mutate/git sources: TS (default Vitest path) and JS (Jest fixtures). */
 const SOURCE_EXT = /\.([cm]?[jt]sx?)$/;
 const SKIP_WALK_DIRS = new Set(["node_modules", "dist"]);
+const HUNK_HEADER = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/;
+const DIFF_GIT = /^diff --git a\/(.+) b\/(.+)$/;
+const DIFF_NEW_FILE = /^\+\+\+ b\/(.+)$/;
 
 export type GitSpawn = (
   command: string,
@@ -24,7 +31,7 @@ export type GitSpawn = (
 
 /**
  * Prod SourceLocatorPort: git dirty TS/JS sources under cwd, or --mutate glob.
- * Extensions: .ts/.tsx/.js/.jsx/.mjs/.cjs. Untracked ignored unless includeUntracked.
+ * Default git mode attaches new-side hunk lineRanges from `git diff -U0 HEAD`.
  */
 export class GitDiffLocator implements SourceLocatorPort {
   untrackedSkipped = 0;
@@ -38,7 +45,8 @@ export class GitDiffLocator implements SourceLocatorPort {
     cwd: string,
     mutateGlob?: string,
     includeUntracked?: boolean,
-  ): Promise<readonly AbsolutePath[]> {
+    fullFile?: boolean,
+  ): Promise<readonly SourceCandidate[]> {
     this.untrackedSkipped = 0;
     if (mutateGlob !== undefined) {
       if (mutateGlob.trim() === "") {
@@ -46,47 +54,78 @@ export class GitDiffLocator implements SourceLocatorPort {
       }
       return this.candidatesFromMutateGlob(cwd, mutateGlob);
     }
-    return this.candidatesFromGitDiff(cwd, includeUntracked === true);
+    return this.candidatesFromGitDiff(
+      cwd,
+      includeUntracked === true,
+      fullFile === true,
+    );
   }
 
   private async candidatesFromMutateGlob(
     cwd: string,
     mutateGlob: string,
-  ): Promise<readonly AbsolutePath[]> {
+  ): Promise<readonly SourceCandidate[]> {
     const relativeSourceFiles = await listRelativeSourceFiles(cwd);
     const matched = micromatch(relativeSourceFiles, mutateGlob);
-    const eligible = this.filterEligible(cwd, matched);
+    const eligible = await this.filterEligible(cwd, matched);
 
     if (eligible.length === 0) {
       throw new EmptyMutateMatchError(mutateGlob);
     }
-    return eligible;
+    return eligible.map((file) => ({ file }));
   }
 
   private async candidatesFromGitDiff(
     cwd: string,
     includeUntracked: boolean,
-  ): Promise<readonly AbsolutePath[]> {
-    const dirty = parseGitPathLines(
-      await this.runGit(cwd, ["diff", "--name-only", "HEAD"]),
-    );
+    fullFile: boolean,
+  ): Promise<readonly SourceCandidate[]> {
+    const diffStdout = await this.runGit(cwd, ["diff", "-U0", "HEAD"]);
+    const hunksByFile = parseUnifiedDiffHunks(diffStdout);
+    const dirty = [...hunksByFile.keys()];
     const untracked = parseGitPathLines(
       await this.runGit(cwd, ["ls-files", "--others", "--exclude-standard"]),
     );
-    const untrackedEligible = this.filterEligible(cwd, untracked);
+    const untrackedEligible = await this.filterEligible(cwd, untracked);
+    const untrackedSet = new Set(
+      untrackedEligible.map((file) => pathRelative(cwd, file)),
+    );
 
-    if (includeUntracked) {
-      return this.filterEligible(cwd, uniquePaths([...dirty, ...untracked]));
+    if (!includeUntracked) {
+      this.untrackedSkipped = untrackedEligible.length;
     }
 
-    this.untrackedSkipped = untrackedEligible.length;
-    return this.filterEligible(cwd, dirty);
+    const relativePaths = includeUntracked
+      ? uniquePaths([...dirty, ...untracked])
+      : dirty;
+
+    const eligible = await this.filterEligible(cwd, relativePaths);
+    const candidates: SourceCandidate[] = [];
+
+    for (const file of eligible) {
+      const relative = pathRelative(cwd, file);
+      const isUntrackedOnly =
+        includeUntracked && untrackedSet.has(relative) && !hunksByFile.has(relative);
+
+      if (fullFile || isUntrackedOnly) {
+        candidates.push({ file });
+        continue;
+      }
+
+      const ranges = hunksByFile.get(relative);
+      if (ranges == null || ranges.length === 0) {
+        continue;
+      }
+      candidates.push({ file, lineRanges: ranges });
+    }
+
+    return candidates;
   }
 
-  private filterEligible(
+  private async filterEligible(
     cwd: string,
     relativePaths: readonly string[],
-  ): AbsolutePath[] {
+  ): Promise<AbsolutePath[]> {
     const eligible: AbsolutePath[] = [];
 
     for (const relativePath of relativePaths) {
@@ -100,6 +139,9 @@ export class GitDiffLocator implements SourceLocatorPort {
 
       const absolutePath = path.resolve(cwd, relativePath);
       if (!this.files.isUnderCwd(absolutePath)) {
+        continue;
+      }
+      if (!(await this.files.exists(absolutePath))) {
         continue;
       }
       eligible.push(toAbsolutePath(absolutePath));
@@ -152,6 +194,83 @@ export class GitDiffLocator implements SourceLocatorPort {
   }
 }
 
+/** Parse `git diff -U0` into posix-relative paths → merged 1-based new-side ranges. */
+export function parseUnifiedDiffHunks(
+  stdout: string,
+): Map<string, LineRange[]> {
+  const byFile = new Map<string, LineRange[]>();
+  let current: string | undefined;
+
+  for (const rawLine of stdout.split("\n")) {
+    const gitMatch = DIFF_GIT.exec(rawLine);
+    if (gitMatch?.[2] != null) {
+      current = stripDiffPath(gitMatch[2]);
+      if (!byFile.has(current)) {
+        byFile.set(current, []);
+      }
+      continue;
+    }
+    const plusMatch = DIFF_NEW_FILE.exec(rawLine);
+    if (plusMatch?.[1] != null) {
+      current = stripDiffPath(plusMatch[1]);
+      if (!byFile.has(current)) {
+        byFile.set(current, []);
+      }
+      continue;
+    }
+    if (current == null) {
+      continue;
+    }
+    const hunk = HUNK_HEADER.exec(rawLine);
+    if (hunk?.[1] == null) {
+      continue;
+    }
+    const start = Number(hunk[1]);
+    const count = hunk[2] == null ? 1 : Number(hunk[2]);
+    if (!Number.isInteger(start) || start < 1 || count <= 0) {
+      continue;
+    }
+    const ranges = byFile.get(current);
+    if (ranges == null) {
+      continue;
+    }
+    ranges.push({ start, end: start + count - 1 });
+  }
+
+  for (const [file, ranges] of byFile) {
+    byFile.set(file, mergeLineRanges(ranges));
+  }
+  return byFile;
+}
+
+function stripDiffPath(raw: string): string {
+  const unquoted = raw.replace(/^"/, "").replace(/"$/, "");
+  return unquoted.replaceAll("\\", "/");
+}
+
+function mergeLineRanges(ranges: readonly LineRange[]): LineRange[] {
+  if (ranges.length === 0) {
+    return [];
+  }
+  const sorted = [...ranges].sort((a, b) => a.start - b.start);
+  const merged: LineRange[] = [];
+  let current = sorted[0]!;
+  for (let i = 1; i < sorted.length; i += 1) {
+    const next = sorted[i]!;
+    if (next.start <= current.end + 1) {
+      current = {
+        start: current.start,
+        end: Math.max(current.end, next.end),
+      };
+      continue;
+    }
+    merged.push(current);
+    current = next;
+  }
+  merged.push(current);
+  return merged;
+}
+
 function parseGitPathLines(stdout: string): string[] {
   return stdout
     .split("\n")
@@ -161,6 +280,10 @@ function parseGitPathLines(stdout: string): string[] {
 
 function uniquePaths(paths: readonly string[]): string[] {
   return [...new Set(paths.map((entry) => entry.replaceAll("\\", "/")))];
+}
+
+function pathRelative(cwd: string, file: string): string {
+  return path.relative(cwd, file).replaceAll("\\", "/");
 }
 
 async function listRelativeSourceFiles(cwd: string): Promise<string[]> {

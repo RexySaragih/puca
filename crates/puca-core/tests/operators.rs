@@ -88,27 +88,33 @@ fn ac2_for_header_is_not_conditional_expression() {
 }
 
 #[test]
-fn ac3_string_literal_addition_is_still_a_site() {
-    // Given — string operands; no type pruning
+fn ac3_nonempty_string_literal_addition_is_not_a_site() {
     let source = r#""a" + "b""#;
-
-    // When
     let sites = discover("ac3.ts", source).expect("discover");
-
-    // Then
     let arithmetic = sites
         .iter()
         .filter(|s| s.mutator_name == "ArithmeticOperator")
         .collect::<Vec<_>>();
+    assert!(
+        arithmetic.is_empty(),
+        "non-empty string `+` must not be an ArithmeticOperator site, got {arithmetic:?}"
+    );
+}
+
+#[test]
+fn empty_string_addition_remains_a_site() {
+    let source = r#"x + """#;
+    let sites = discover("empty-plus.ts", source).expect("discover");
+    let arithmetic: Vec<&Site> = sites
+        .iter()
+        .filter(|s| s.mutator_name == "ArithmeticOperator")
+        .collect();
     assert_eq!(
         arithmetic.len(),
         1,
-        "AC3: string `+` must still be an ArithmeticOperator site"
+        "x + empty string must remain discoverable, got {sites:?}"
     );
     assert_eq!(arithmetic[0].replacement, "-");
-    let start = arithmetic[0].start_offset as usize;
-    let end = arithmetic[0].end_offset as usize;
-    assert_eq!(&source[start..end], "+");
 }
 
 #[test]
@@ -149,15 +155,15 @@ fn non_template_addition_still_discovers_beside_template() {
     // When
     let sites = discover("mixed.ts", source).expect("discover");
 
-    // Then — only the two non-template ArithmeticOperator sites
+    // Then — only the identifier `a + b` (non-empty string `+` is omitted)
     let arithmetic: Vec<&Site> = sites
         .iter()
         .filter(|s| s.mutator_name == "ArithmeticOperator")
         .collect();
     assert_eq!(
         arithmetic.len(),
-        2,
-        "SC-323: non-template `a + b` and string `+` must still discover, got {sites:?}"
+        1,
+        "SC-323: non-template `a + b` must still discover; string `+` omitted, got {sites:?}"
     );
     for site in &arithmetic {
         let sliced = &source[site.start_offset as usize..site.end_offset as usize];
@@ -173,6 +179,47 @@ fn unary_plus_minus_are_not_arithmetic_sites() {
         replacements_named(&sites, "ArithmeticOperator").is_empty(),
         "unary +/- must not be mutated"
     );
+    assert!(
+        replacements_named(&sites, "UnaryOperator").is_empty(),
+        "unary +/- must not be UnaryOperator sites"
+    );
+}
+
+#[test]
+fn unary_not_emits_empty_replacement() {
+    let source = "!flag";
+    let sites = discover("bang.ts", source).expect("discover");
+    let unary: Vec<&Site> = sites
+        .iter()
+        .filter(|s| s.mutator_name == "UnaryOperator")
+        .collect();
+    assert_eq!(
+        unary.len(),
+        1,
+        "expected one UnaryOperator site, got {sites:?}"
+    );
+    assert_eq!(unary[0].replacement, "");
+    let sliced = &source[unary[0].start_offset as usize..unary[0].end_offset as usize];
+    assert_eq!(sliced, "!");
+}
+
+#[test]
+fn unary_not_inside_template_is_skipped() {
+    let sites = discover("bang-tpl.ts", "`x ${!flag}`").expect("discover");
+    assert!(
+        sites.is_empty(),
+        "template interpolation `!` must yield 0 sites, got {sites:?}"
+    );
+}
+
+#[test]
+fn puca_disable_next_line_omits_unary_operator() {
+    let source = "// puca-disable-next-line UnaryOperator\nconst v = !flag;\n";
+    let sites = discover("bang-disable.ts", source).expect("discover");
+    assert!(
+        !sites.iter().any(|s| s.mutator_name == "UnaryOperator"),
+        "named disable must omit UnaryOperator, got {sites:?}"
+    );
 }
 
 #[test]
@@ -185,7 +232,8 @@ fn relational_equality_emits_two_replacements() {
 #[test]
 fn ternary_conditional_replaces_predicate_only() {
     // Given — toggleLabel-style ternary; whole expr must stay a string
-    let source = "export function toggleLabel(on: boolean): string {\n  return on ? \"on\" : \"off\";\n}\n";
+    let source =
+        "export function toggleLabel(on: boolean): string {\n  return on ? \"on\" : \"off\";\n}\n";
 
     // When
     let sites = discover("flagMatrix.ts", source).expect("discover");
@@ -200,10 +248,7 @@ fn ternary_conditional_replaces_predicate_only() {
         2,
         "ternary should emit true and false predicate sites, got {conditional:?}"
     );
-    let mut replacements: Vec<&str> = conditional
-        .iter()
-        .map(|s| s.replacement.as_str())
-        .collect();
+    let mut replacements: Vec<&str> = conditional.iter().map(|s| s.replacement.as_str()).collect();
     replacements.sort();
     assert_eq!(replacements, vec!["false", "true"]);
     for site in conditional {
@@ -213,4 +258,22 @@ fn ternary_conditional_replaces_predicate_only() {
             "ConditionalExpression must splice the test node only, not `on ? \"on\" : \"off\"`, got {sliced:?}"
         );
     }
+}
+
+#[test]
+fn compound_ternary_predicate_is_not_a_conditional_site() {
+    let source = "a && b ? x : y";
+    let sites = discover("compound-ternary.ts", source).expect("discover");
+    let conditional: Vec<&Site> = sites
+        .iter()
+        .filter(|s| s.mutator_name == "ConditionalExpression")
+        .collect();
+    assert!(
+        conditional.is_empty(),
+        "LogicalExpression ternary test must not get ConditionalExpression sites, got {conditional:?}"
+    );
+    assert!(
+        !replacements_named(&sites, "LogicalOperator").is_empty(),
+        "inner LogicalOperator on `&&` must still fire, got {sites:?}"
+    );
 }

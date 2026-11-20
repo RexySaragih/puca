@@ -1,10 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import micromatch from "micromatch";
 import { normalizeModulePath } from "../vitest/pucaRamPlugin.js";
+import { resolveJestSpecDiscovery } from "./resolveProjectJest.js";
 
 const TEST_FILE_RE = /\.(test|spec)\.[cm]?[jt]sx?$/i;
 const IMPORT_RE =
   /(?:require\s*\(\s*['"]([^'"]+)['"]\s*\)|from\s+['"]([^'"]+)['"]|import\s*\(\s*['"]([^'"]+)['"]\s*\))/g;
+const SKIP_WALK_DIRS = new Set(["node_modules", "dist", ".git", ".puca"]);
+const RELATED_IMPORT_HOP_CAP = 8;
+const FALLBACK_TEST_ROOTS = ["test", "tests", "__tests__", "src"];
 
 /**
  * Lightweight static scan: map source files → specs that import them.
@@ -20,6 +25,7 @@ export async function scanJestRelated(
   const allSpecs = await collectTestFiles(cwd);
   const relatedBySource = new Map<string, string[]>();
   const candidateNorms = candidates.map((c) => normalizeModulePath(c));
+  const aliases = await loadTsPathAliases(cwd);
 
   for (const norm of candidateNorms) {
     relatedBySource.set(norm, []);
@@ -27,8 +33,12 @@ export async function scanJestRelated(
 
   for (const spec of allSpecs) {
     const content = await fs.readFile(spec, "utf8");
-    // One-hop re-exports (barrel index → leaf) so inventory.js is covered via catalog/.
-    const imported = await resolveImportedPathsDeep(spec, content, 1);
+    const imported = await resolveImportedPathsDeep(
+      spec,
+      content,
+      RELATED_IMPORT_HOP_CAP,
+      aliases,
+    );
     for (const candidate of candidateNorms) {
       if (!imported.has(candidate)) {
         continue;
@@ -50,13 +60,62 @@ export async function scanJestRelated(
   return { relatedBySource, allSpecs };
 }
 
+export { RELATED_IMPORT_HOP_CAP };
+
 async function collectTestFiles(cwd: string): Promise<string[]> {
-  const roots = ["test", "tests", "__tests__", "src"];
+  const discovery = await resolveJestSpecDiscovery(cwd);
+  if (discovery != null) {
+    return collectSpecsFromDiscovery(cwd, discovery);
+  }
+  return collectTestFilesFallback(cwd);
+}
+
+async function collectSpecsFromDiscovery(
+  cwd: string,
+  discovery: {
+    readonly testMatch?: readonly string[];
+    readonly testRegex?: readonly string[];
+  },
+): Promise<string[]> {
   const found: string[] = [];
-  for (const root of roots) {
+  await walkAllFiles(cwd, cwd, (full, relative) => {
+    if (matchesJestDiscovery(relative, discovery)) {
+      found.push(normalizeModulePath(full));
+    }
+  });
+  return [...new Set(found)].sort((a, b) => a.localeCompare(b));
+}
+
+function matchesJestDiscovery(
+  relative: string,
+  discovery: {
+    readonly testMatch?: readonly string[];
+    readonly testRegex?: readonly string[];
+  },
+): boolean {
+  const posix = relative.replaceAll("\\", "/");
+  if (discovery.testMatch != null) {
+    return micromatch.isMatch(posix, [...discovery.testMatch], {
+      dot: true,
+    });
+  }
+  if (discovery.testRegex != null) {
+    return discovery.testRegex.some((pattern) => {
+      try {
+        return new RegExp(pattern).test(posix);
+      } catch {
+        return false;
+      }
+    });
+  }
+  return false;
+}
+
+async function collectTestFilesFallback(cwd: string): Promise<string[]> {
+  const found: string[] = [];
+  for (const root of FALLBACK_TEST_ROOTS) {
     await walkTests(path.join(cwd, root), found);
   }
-  // Also pick up top-level *.test.js next to package.json (rare).
   try {
     const entries = await fs.readdir(cwd, { withFileTypes: true });
     for (const entry of entries) {
@@ -78,7 +137,7 @@ async function walkTests(dir: string, out: string[]): Promise<void> {
     return;
   }
   for (const entry of entries) {
-    if (entry.name === "node_modules" || entry.name === "dist") {
+    if (SKIP_WALK_DIRS.has(entry.name)) {
       continue;
     }
     const full = path.join(dir, entry.name);
@@ -92,9 +151,80 @@ async function walkTests(dir: string, out: string[]): Promise<void> {
   }
 }
 
+async function walkAllFiles(
+  cwd: string,
+  dir: string,
+  visit: (full: string, relative: string) => void,
+): Promise<void> {
+  let entries;
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    if (SKIP_WALK_DIRS.has(entry.name)) {
+      continue;
+    }
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      await walkAllFiles(cwd, full, visit);
+      continue;
+    }
+    if (!entry.isFile()) {
+      continue;
+    }
+    visit(full, path.relative(cwd, full));
+  }
+}
+
+interface PathAliasConfig {
+  readonly baseUrl: string;
+  readonly paths: readonly {
+    readonly pattern: string;
+    readonly targets: readonly string[];
+  }[];
+}
+
+async function loadTsPathAliases(cwd: string): Promise<PathAliasConfig | undefined> {
+  try {
+    const raw = await fs.readFile(path.join(cwd, "tsconfig.json"), "utf8");
+    const parsed = JSON.parse(raw) as {
+      compilerOptions?: { baseUrl?: unknown; paths?: unknown };
+    };
+    const compiler = parsed.compilerOptions;
+    if (compiler == null) {
+      return undefined;
+    }
+    const baseUrlRaw =
+      typeof compiler.baseUrl === "string" ? compiler.baseUrl : ".";
+    const baseUrl = path.resolve(cwd, baseUrlRaw);
+    const paths: { pattern: string; targets: string[] }[] = [];
+    if (compiler.paths != null && typeof compiler.paths === "object") {
+      for (const [pattern, targets] of Object.entries(
+        compiler.paths as Record<string, unknown>,
+      )) {
+        if (!Array.isArray(targets)) {
+          continue;
+        }
+        const mapped = targets.filter(
+          (entry): entry is string => typeof entry === "string",
+        );
+        if (mapped.length > 0) {
+          paths.push({ pattern, targets: mapped });
+        }
+      }
+    }
+    return { baseUrl, paths };
+  } catch {
+    return undefined;
+  }
+}
+
 function resolveImportedPaths(
   fromFile: string,
   content: string,
+  aliases: PathAliasConfig | undefined,
 ): Set<string> {
   const resolved = new Set<string>();
   const dir = path.dirname(fromFile);
@@ -102,27 +232,77 @@ function resolveImportedPaths(
   let match: RegExpExecArray | null;
   while ((match = IMPORT_RE.exec(content)) != null) {
     const spec = match[1] ?? match[2] ?? match[3];
-    if (spec == null || !spec.startsWith(".")) {
+    if (spec == null) {
       continue;
     }
-    const absolute = path.resolve(dir, spec);
-    for (const withExt of expandJsExtensions(absolute)) {
-      resolved.add(normalizeModulePath(withExt));
+    for (const absolute of resolveSpecifier(dir, spec, aliases)) {
+      resolved.add(normalizeModulePath(absolute));
     }
   }
   return resolved;
 }
 
+function resolveSpecifier(
+  fromDir: string,
+  spec: string,
+  aliases: PathAliasConfig | undefined,
+): string[] {
+  if (spec.startsWith(".")) {
+    return expandJsExtensions(path.resolve(fromDir, spec));
+  }
+  if (aliases == null) {
+    return [];
+  }
+  const aliased = resolvePathAlias(spec, aliases);
+  if (aliased.length > 0) {
+    return aliased;
+  }
+  return expandJsExtensions(path.resolve(aliases.baseUrl, spec));
+}
+
+function resolvePathAlias(spec: string, aliases: PathAliasConfig): string[] {
+  const resolved: string[] = [];
+  for (const alias of aliases.paths) {
+    const captured = matchStarPattern(alias.pattern, spec);
+    if (captured == null) {
+      continue;
+    }
+    for (const target of alias.targets) {
+      const mapped = target.includes("*")
+        ? target.replace("*", captured)
+        : target;
+      resolved.push(
+        ...expandJsExtensions(path.resolve(aliases.baseUrl, mapped)),
+      );
+    }
+  }
+  return resolved;
+}
+
+function matchStarPattern(pattern: string, spec: string): string | undefined {
+  if (!pattern.includes("*")) {
+    return spec === pattern ? "" : undefined;
+  }
+  const star = pattern.indexOf("*");
+  const prefix = pattern.slice(0, star);
+  const suffix = pattern.slice(star + 1);
+  if (!spec.startsWith(prefix) || !spec.endsWith(suffix)) {
+    return undefined;
+  }
+  return spec.slice(prefix.length, spec.length - suffix.length);
+}
+
 /**
- * Resolve relative imports, then follow up to `maxDepth` re-export hops
+ * Resolve imports, then follow up to `maxDepth` re-export hops
  * (e.g. test → catalog/index.js → inventory.js).
  */
 async function resolveImportedPathsDeep(
   fromFile: string,
   content: string,
   maxDepth: number,
+  aliases: PathAliasConfig | undefined,
 ): Promise<Set<string>> {
-  const resolved = resolveImportedPaths(fromFile, content);
+  const resolved = resolveImportedPaths(fromFile, content, aliases);
   if (maxDepth <= 0) {
     return resolved;
   }
@@ -143,7 +323,7 @@ async function resolveImportedPathsDeep(
       }
       continue;
     }
-    for (const child of resolveImportedPaths(next, body)) {
+    for (const child of resolveImportedPaths(next, body, aliases)) {
       if (seen.has(child)) {
         continue;
       }

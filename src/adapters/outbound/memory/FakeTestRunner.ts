@@ -36,6 +36,7 @@ export class FakeTestRunner implements TestRunnerPort {
     readonly source: string | null;
   }> = [];
   respawnCount = 0;
+  cancelCount = 0;
   closed = false;
   testTimeoutMs = DEFAULT_TEST_TIMEOUT_MS;
   recycleCount = 0;
@@ -157,6 +158,10 @@ export class FakeTestRunner implements TestRunnerPort {
     } finally {
       this.inFlightRelated -= 1;
     }
+  }
+
+  async cancelCurrentRun(): Promise<void> {
+    this.cancelCount += 1;
   }
 
   async respawn(): Promise<RunnerSession> {

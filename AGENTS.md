@@ -14,12 +14,12 @@ flowchart LR
 
 ## Non-negotiables
 
-1. **Hexagon stays clean.** `src/domain` and `src/application` must not import `vitest`, `vite`, napi bindings, or `node:child_process`. Verify with `npm run lint:deps`.
+1. **Hexagon stays clean.** `src/domain` and `src/application` must not import `vitest`, `vite`, napi bindings, or Node I/O (`node:fs`, `node:os`, `node:child_process`, `node:worker_threads`). Verify with `npm run lint:deps`.
 2. **Composition root is sacred.** Wire prod vs fakes only in `src/composition/createRuntime.ts`. Do not invent parallel adapter names (`ExecGitAdapter`, `NapiOxcMutator`, `VitestRunnerAdapter`, `SchemaJsonReporter`).
 3. **Mutants never touch disk.** Intentional writes only: `--json`, `--sarif`, `--html`, and opt-in `--cache` (`.puca/cache.json` metadata). RAM inject + invalidate after every mutant (R1). Never store mutated source in cache.
 4. **A6 targeting lock** — idle empty git-dirty → exit **0**; empty `--mutate` → **2**; not-a-git without `--mutate` → **2** with the exact stderr string. No-flag defaults stay Phase 1–3.3 (SC-346).
 5. **Behavioral tests** — name by behavior (`when … / should …`), mock I/O boundaries only, prefer Given/When/Then. Prefer extending `test/*.test.ts` over 1:1 class mirrors.
-6. **Do not hand-edit Planora lane status** when Planora MCP is connected — use `move_card` / `update_card` with the active board path (Phase 3.5: `.planora/puca-phase-3-5-noise-suppression-1794744709.planora.md`).
+6. **Do not hand-edit Planora lane status** when Planora MCP is connected — use `move_card` / `update_card` with the active board path (Phase 3.6: `.planora/puca-phase-3-6-honesty-and-signal.planora.md`).
 
 ```mermaid
 flowchart BT
@@ -28,7 +28,7 @@ flowchart BT
   Adapters[adapters]
   Adapters --> Application
   Application --> Domain
-  Forbidden["vitest · vite · napi · child_process"] -.->|must not enter| Domain
+  Forbidden["vitest · vite · napi · node:fs/os/child_process/worker_threads"] -.->|must not enter| Domain
   Forbidden -.->|must not enter| Application
 ```
 
@@ -63,17 +63,17 @@ flowchart LR
 | Change | Primary paths |
 | --- | --- |
 | Domain types / statuses | `src/domain/` |
-| Session orchestration / CI exit gates | `src/application/use-cases/RunMutationSessionUseCase.ts`, `src/application/evaluateQualityGates.ts` |
-| Ports | `src/application/ports/` (`ReportPort.writeSarif?` / `writeHtml?`; `CachePort`; `WorkspaceDiscoveryPort`) |
-| CLI flags / exit process | `src/adapters/inbound/cli/`, `src/cli.ts` |
+| Session orchestration / CI exit gates | `src/application/use-cases/RunMutationSessionUseCase.ts`, `discoverSession.ts`, `scoreMutants.ts`, `src/application/evaluateQualityGates.ts` |
+| Ports | `src/application/ports/` (`ReportPort.writeSarif?` / `writeHtml?`; `CachePort`; `WorkspaceDiscoveryPort`; `SourceLocatorPort` hunk ranges) |
+| CLI flags / exit process | `src/adapters/inbound/cli/`, `src/cli.ts` (`--help`, `--version`, `--full-file`) |
 | Git targeting / excludes | `src/adapters/outbound/git/`, `src/domain/excludes.ts` |
-| Vitest session / RAM / map | `src/adapters/outbound/vitest/` |
-| Jest single-worker runner | `src/adapters/outbound/jest/JestTestRunner.ts`, `src/composition/createRuntime.ts` |
+| Vitest session / RAM / map | `src/adapters/outbound/vitest/` (static-string `import()` in `collectImportGraph.ts`) |
+| Jest single-worker runner | `src/adapters/outbound/jest/` (`scanJestRelated.ts` hop cap 8; `JestTestRunner.ts`) |
 | Reports / File Summary / SARIF / HTML | `src/adapters/outbound/report/` (`StdioReport`, `formatFileSummaryTable`, `SarifFile`, `HtmlFile`) |
 | Opt-in disk cache | `src/adapters/outbound/cache/FileHashCache.ts`, `src/application/ports/outbound/CachePort.ts` |
 | Workspace discovery / sequential sessions | `src/adapters/outbound/workspace/NodeWorkspaceDiscovery.ts`, `src/application/WorkspaceTargetResolver.ts` |
-| Operators / disable / heuristics / apply / TemplateLiteral skip | `crates/puca-core/src/` (`operators/`, `disable.rs`, `heuristics.rs`) |
-| NAPI surface | `crates/puca-binding/`, `src/adapters/outbound/napi/` |
+| Operators / disable / heuristics / apply / TemplateLiteral skip | `crates/puca-core/src/` (`operators/` including `unary.rs`, `disable.rs`, `heuristics.rs`) |
+| NAPI surface | `crates/puca-binding/`, `src/adapters/outbound/napi/` (`SUPPORTED_ABIS`) |
 | Fixture oracle | `fixtures/loop/`, `test/e2e.loopFixture.test.ts` |
 
 ```mermaid

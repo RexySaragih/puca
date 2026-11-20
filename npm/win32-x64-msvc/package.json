@@ -1,6 +1,6 @@
 {
   "name": "puca-win32-x64-msvc",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Púca native binding for win32-x64-msvc",
   "license": "MIT",
   "main": "puca-binding.win32-x64-msvc.node",

@@ -107,9 +107,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p smoke-workspace
-          cp artifacts/puca-0.2.0.tgz artifacts/puca-darwin-arm64-0.2.0.tgz smoke-workspace/
+          cp artifacts/puca-0.3.0.tgz artifacts/puca-darwin-arm64-0.3.0.tgz smoke-workspace/
           cd smoke-workspace
-          npm install ./puca-0.2.0.tgz ./puca-darwin-arm64-0.2.0.tgz --no-fund --no-audit
+          npm install ./puca-0.3.0.tgz ./puca-darwin-arm64-0.3.0.tgz --no-fund --no-audit
           cd "${GITHUB_WORKSPACE}"
           JSON_OUT="$(mktemp)"
           PUCA_BIN="${GITHUB_WORKSPACE}/smoke-workspace/node_modules/.bin/puca"
@@ -148,9 +148,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p smoke-workspace
-          cp artifacts/puca-0.2.0.tgz artifacts/puca-linux-x64-gnu-0.2.0.tgz smoke-workspace/
+          cp artifacts/puca-0.3.0.tgz artifacts/puca-linux-x64-gnu-0.3.0.tgz smoke-workspace/
           cd smoke-workspace
-          npm install ./puca-0.2.0.tgz ./puca-linux-x64-gnu-0.2.0.tgz --no-fund --no-audit
+          npm install ./puca-0.3.0.tgz ./puca-linux-x64-gnu-0.3.0.tgz --no-fund --no-audit
           cd "${GITHUB_WORKSPACE}"
           JSON_OUT="$(mktemp)"
           PUCA_BIN="${GITHUB_WORKSPACE}/smoke-workspace/node_modules/.bin/puca"
@@ -178,10 +178,10 @@ jobs:
           set -euo pipefail
           mkdir -p release-upload
           for name in \
-            puca-0.2.0.tgz \
-            puca-darwin-arm64-0.2.0.tgz \
-            puca-darwin-x64-0.2.0.tgz \
-            puca-linux-x64-gnu-0.2.0.tgz
+            puca-0.3.0.tgz \
+            puca-darwin-arm64-0.3.0.tgz \
+            puca-darwin-x64-0.3.0.tgz \
+            puca-linux-x64-gnu-0.3.0.tgz
           do
             FOUND="$(find release-artifacts -name "${name}" | head -n 1 || true)"
             if [[ -z "${FOUND}" ]]; then
@@ -190,7 +190,7 @@ jobs:
             fi
             cp "${FOUND}" "release-upload/${name}"
           done
-          WIN="$(find release-artifacts -name 'puca-win32-x64-msvc-0.2.0.tgz' | head -n 1 || true)"
+          WIN="$(find release-artifacts -name 'puca-win32-x64-msvc-0.3.0.tgz' | head -n 1 || true)"
           if [[ -n "${WIN}" ]]; then
             cp "${WIN}" release-upload/
           else

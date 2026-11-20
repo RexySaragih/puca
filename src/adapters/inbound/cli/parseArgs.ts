@@ -20,12 +20,47 @@ export interface ParsedCliArgs {
   readonly workspaceGlob?: string;
   /** Test runner: vitest (default) | jest (Wave D). */
   readonly runner: "vitest" | "jest";
+  /** Score every site in dirty files (skip git hunk filter). */
+  readonly fullFile: boolean;
 }
+
+/** stdout + exit 0 for --help / --version (not a refuse). */
+export class CliEarlyExit extends Error {
+  readonly exitCode = 0;
+  readonly kind: "help" | "version";
+
+  constructor(kind: "help" | "version", message = "") {
+    super(message);
+    this.name = "CliEarlyExit";
+    this.kind = kind;
+  }
+}
+
+export const CLI_USAGE = `Usage: puca [options]
+
+  --mutate <glob>            Mutate matching files (whole file; ignores git)
+  --include-untracked        Include untracked sources in default git targeting
+  --full-file                Score all sites in dirty files (skip hunk filter)
+  --timeout <ms>             Outer mutant timeout
+  --workers <n>              Parallel Vitest workers (default 1)
+  --verbose                  Extra diagnostics
+  --json <path>              Schema JSON report
+  --sarif <path>             Survived-only SARIF
+  --html <path>              Offline HTML report
+  --cache                    Metadata cache under .puca/cache.json
+  --workspace <glob>         Sequential package sessions
+  --runner vitest|jest       Test runner (default vitest)
+  --break-on-score <1-100>   Exit 1 when Kill% is below n
+  --fail-on-no-coverage      Exit 1 when any NoCoverage
+  --help, -h                 Show this help
+  --version, -V              Print version
+`;
 
 /**
  * Parse `puca` flags from argv (without node/script). cwd is always process.cwd() at the CLI.
  * Flags: --mutate, --json, --timeout, --include-untracked, --verbose, --workers,
- * --break-on-score, --fail-on-no-coverage, --sarif, --html, --cache, --workspace, --runner.
+ * --break-on-score, --fail-on-no-coverage, --sarif, --html, --cache, --workspace,
+ * --runner, --full-file, --help, --version.
  */
 export function parseArgs(argv: readonly string[]): ParsedCliArgs {
   let mutateGlob: string | undefined;
@@ -41,11 +76,19 @@ export function parseArgs(argv: readonly string[]): ParsedCliArgs {
   let cache = false;
   let workspaceGlob: string | undefined;
   let runner: "vitest" | "jest" = "vitest";
+  let fullFile = false;
 
   for (let i = 0; i < argv.length; i += 1) {
     const token = argv[i];
     if (token === undefined) {
       break;
+    }
+
+    if (token === "--help" || token === "-h") {
+      throw new CliEarlyExit("help", CLI_USAGE);
+    }
+    if (token === "--version" || token === "-V") {
+      throw new CliEarlyExit("version");
     }
 
     if (token === "--mutate") {
@@ -116,6 +159,10 @@ export function parseArgs(argv: readonly string[]): ParsedCliArgs {
       verbose = true;
       continue;
     }
+    if (token === "--full-file") {
+      fullFile = true;
+      continue;
+    }
     if (token.startsWith("--mutate=")) {
       mutateGlob = requireNonEmptyEqualsValue(
         token.slice("--mutate=".length),
@@ -173,6 +220,7 @@ export function parseArgs(argv: readonly string[]): ParsedCliArgs {
     cache,
     workspaceGlob,
     runner,
+    fullFile,
   };
 }
 

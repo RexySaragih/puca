@@ -26,7 +26,8 @@ import { scanJestRelated } from "./scanJestRelated.js";
 
 const SESSION_ID = "jest-session";
 const DEFAULT_TEST_TIMEOUT_MS = 5000;
-const CHILD_WALL_MS = 120_000;
+const DEFAULT_CHILD_WALL_MS = 120_000;
+const CHILD_WALL_PADDING_MS = 2000;
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const TRANSFORMER_PATH = path.join(here, "pucaJestTransformer.cjs");
@@ -53,6 +54,7 @@ export class JestTestRunner implements TestRunnerPort {
   private relatedBySource: Map<string, readonly string[]> | null = null;
   private allSpecs: readonly string[] = [];
   private testTimeoutMs = DEFAULT_TEST_TIMEOUT_MS;
+  private childWallMs = DEFAULT_CHILD_WALL_MS;
   private sessionActive = false;
   private activeChild: ChildProcess | null = null;
   private readonly cwd: string;
@@ -132,6 +134,14 @@ export class JestTestRunner implements TestRunnerPort {
 
   getTestTimeoutMs(): number {
     return this.testTimeoutMs;
+  }
+
+  configureOuterTimeoutMs(timeoutMs: number): void {
+    this.childWallMs = timeoutMs + CHILD_WALL_PADDING_MS;
+  }
+
+  async cancelCurrentRun(): Promise<void> {
+    this.killActiveChild();
   }
 
   async runRelated(mutant: MutantRunRequest): Promise<RelatedRunResult> {
@@ -215,7 +225,7 @@ export class JestTestRunner implements TestRunnerPort {
       const timer = setTimeout(() => {
         child.kill("SIGKILL");
         settle(() => reject(new Error("Jest child timed out")));
-      }, CHILD_WALL_MS);
+      }, this.childWallMs);
 
       child.on("error", (error) => {
         settle(() => reject(error));

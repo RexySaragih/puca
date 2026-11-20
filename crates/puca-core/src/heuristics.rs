@@ -49,9 +49,11 @@ fn collect_heuristic_spans(source: &str, program: &Program<'_>) -> HeuristicSpan
 }
 
 fn is_heuristic_skip(site: &Site, spans: &HeuristicSpans) -> bool {
-    if spans.diagnostic_args.iter().any(|arg| {
-        site.start_offset >= arg.start && site.end_offset <= arg.end
-    }) {
+    if spans
+        .diagnostic_args
+        .iter()
+        .any(|arg| site.start_offset >= arg.start && site.end_offset <= arg.end)
+    {
         return true;
     }
     if site.mutator_name == ARITHMETIC

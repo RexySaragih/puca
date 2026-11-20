@@ -94,10 +94,7 @@ fn sc401_bare_next_line_omits_all_mutators_on_line() {
 
     // Then — line 2 fully suppressed; line 3 arithmetic remains
     assert!(
-        outcome
-            .sites
-            .iter()
-            .all(|s| s.start_line != 2),
+        outcome.sites.iter().all(|s| s.start_line != 2),
         "SC-401: bare next-line must omit all mutators on line 2, got {:?}",
         outcome.sites
     );
@@ -182,9 +179,7 @@ fn sc407_block_comment_disable_is_ignored() {
 
     // Then
     assert!(
-        sites
-            .iter()
-            .any(|s| s.mutator_name == "ArithmeticOperator"),
+        sites.iter().any(|s| s.mutator_name == "ArithmeticOperator"),
         "SC-407: block comments must not suppress sites, got {sites:?}"
     );
 }

@@ -116,4 +116,72 @@ describe("Reverse-map barrel re-exports", () => {
       );
     });
   });
+
+  describe("when a module uses a static-string import()", () => {
+    it("should follow import(\"./lazy.ts\") and ignore import(variable)", async () => {
+      const spec = abs("test/lazy.test.ts");
+      const loader = abs("src/loader.ts");
+      const lazy = abs("src/lazy.ts");
+      const nodes = new Map<string, ViteModuleNodeLike>();
+
+      function nodeFor(file: string): ViteModuleNodeLike {
+        const existing = nodes.get(file);
+        if (existing != null) {
+          return existing;
+        }
+        const created: ViteModuleNodeLike = {
+          id: file,
+          file,
+          importedModules: new Set(),
+        };
+        nodes.set(file, created);
+        return created;
+      }
+      nodeFor(spec);
+      nodeFor(loader);
+      nodeFor(lazy);
+
+      const env: ViteEnvironmentLike = {
+        name: "ssr",
+        async transformRequest(url: string) {
+          const file = path.isAbsolute(url)
+            ? normalizeModulePath(url)
+            : abs(url.replace(/^\//, ""));
+          if (file === spec) {
+            return { deps: [loader] };
+          }
+          if (file === loader) {
+            return {
+              code: 'const key = "./nope.ts"; import(key); import("./lazy.ts");\n',
+              deps: [],
+            };
+          }
+          return { deps: [] };
+        },
+        moduleGraph: {
+          getModuleById(id: string) {
+            return nodes.get(normalizeModulePath(id));
+          },
+          getModulesByFile(file: string) {
+            const node = nodes.get(normalizeModulePath(file));
+            return node != null ? new Set([node]) : undefined;
+          },
+        },
+      };
+
+      const host: VitestGraphHost = {
+        globTestSpecifications: async () => [{ moduleId: spec }],
+        getRootProject: () => ({
+          config: { root },
+          vite: { environments: { ssr: env } },
+        }),
+      };
+
+      const graph = await collectImportGraph(host);
+      const imports = graph.importsBySpec.get(spec) ?? [];
+      expect(imports).toContain(loader);
+      expect(imports).toContain(lazy);
+      expect(imports.some((entry) => entry.endsWith("nope.ts"))).toBe(false);
+    });
+  });
 });

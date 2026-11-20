@@ -136,7 +136,7 @@ async function collectReachableModules(
 
   while (queue.length > 0) {
     const current = queue.pop()!;
-    const depsFromTransform = await transformDeps(env, root, current);
+    const transformed = await requestTransform(env, root, current);
     const node = findModuleNode(env, current);
     const children = new Set<string>();
 
@@ -148,11 +148,18 @@ async function collectReachableModules(
         }
       }
     }
-    for (const dep of depsFromTransform) {
+    for (const dep of transformed?.deps ?? []) {
       const file = resolveDepToFile(root, dep);
       if (file != null) {
         children.add(file);
       }
+    }
+    for (const file of staticImportCallTargets(
+      transformed?.code,
+      current,
+      root,
+    )) {
+      children.add(file);
     }
 
     for (const file of children) {
@@ -168,16 +175,37 @@ async function collectReachableModules(
   return imports.sort();
 }
 
-async function transformDeps(
-  env: ViteEnvironmentLike,
+const STATIC_IMPORT_CALL_RE = /\bimport\s*\(\s*(['"])([^'"]+)\1\s*\)/g;
+
+/** Static-string `import("./x")` only — `import(variable)` stays NoCoverage. */
+function staticImportCallTargets(
+  code: string | undefined,
+  fromFile: string,
   root: string,
-  filePath: string,
-): Promise<readonly string[]> {
-  if (env.transformRequest == null) {
+): string[] {
+  if (code == null || code === "") {
     return [];
   }
-  const result = await requestTransform(env, root, filePath);
-  return result?.deps ?? [];
+  const resolved: string[] = [];
+  STATIC_IMPORT_CALL_RE.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = STATIC_IMPORT_CALL_RE.exec(code)) != null) {
+    const spec = match[2];
+    if (spec == null || spec.includes("${")) {
+      continue;
+    }
+    if (!spec.startsWith(".") && !spec.startsWith("/")) {
+      continue;
+    }
+    const absolute = spec.startsWith("/")
+      ? path.join(root, spec.replace(/^\//, ""))
+      : path.resolve(path.dirname(fromFile), spec);
+    const file = resolveDepToFile(root, absolute);
+    if (file != null) {
+      resolved.push(file);
+    }
+  }
+  return resolved;
 }
 
 async function requestTransform(

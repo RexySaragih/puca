@@ -3,7 +3,11 @@
 import { realpathSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { parseArgs } from "./adapters/inbound/cli/parseArgs.js";
+import { createRequire } from "node:module";
+import {
+  CliEarlyExit,
+  parseArgs,
+} from "./adapters/inbound/cli/parseArgs.js";
 import { NodeWorkspaceDiscovery } from "./adapters/outbound/workspace/NodeWorkspaceDiscovery.js";
 import { WorkspaceTargetResolver } from "./application/WorkspaceTargetResolver.js";
 import type { PackageSessionRunner } from "./application/WorkspaceTargetResolver.js";
@@ -13,6 +17,8 @@ import { EmptyWorkspaceMatchError } from "./domain/targetingErrors.js";
 import { createRuntime } from "./composition/createRuntime.js";
 import type { CreateRuntimeOptions } from "./composition/createRuntime.js";
 import type { Runtime } from "./composition/createRuntime.js";
+
+const requireFromHere = createRequire(fileURLToPath(import.meta.url));
 
 const EXIT_REFUSE = 2;
 
@@ -40,6 +46,12 @@ export async function runCli(options: RunCliOptions = {}): Promise<number> {
   try {
     parsed = parseArgs(options.argv ?? process.argv.slice(2));
   } catch (error) {
+    if (error instanceof CliEarlyExit) {
+      const text =
+        error.kind === "version" ? `${readPackageVersion()}\n` : error.message;
+      process.stdout.write(text.endsWith("\n") ? text : `${text}\n`);
+      return error.exitCode;
+    }
     const message = error instanceof Error ? error.message : String(error);
     process.stderr.write(`${message}\n`);
     return EXIT_REFUSE;
@@ -62,6 +74,7 @@ export async function runCli(options: RunCliOptions = {}): Promise<number> {
     cache: parsed.cache,
     workspaceGlob: parsed.workspaceGlob,
     runner: parsed.runner,
+    fullFile: parsed.fullFile,
   };
 
   if (parsed.workspaceGlob !== undefined) {
@@ -159,6 +172,11 @@ function isDirectRun(): boolean {
     const base = path.basename(entry);
     return base === "cli.js" || base === "cli.ts" || base === "puca";
   }
+}
+
+function readPackageVersion(): string {
+  const pkg = requireFromHere("../package.json") as { version?: string };
+  return pkg.version ?? "0.0.0";
 }
 
 if (isDirectRun()) {

@@ -254,6 +254,13 @@ export class VitestTestRunner implements TestRunnerPort {
     }
   }
 
+  async cancelCurrentRun(): Promise<void> {
+    if (this.vitest == null) {
+      return;
+    }
+    await forceCancelHungWorkers(this.vitest);
+  }
+
   async respawn(): Promise<RunnerSession> {
     if (this.overlay == null) {
       throw new Error("VitestTestRunner.respawn requires an active overlay");

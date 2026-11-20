@@ -97,6 +97,7 @@ describe("CLI terminal report and exit codes", () => {
         cache: false,
         workspaceGlob: undefined,
         runner: "vitest",
+        fullFile: false,
       });
     });
 
@@ -115,6 +116,7 @@ describe("CLI terminal report and exit codes", () => {
         cache: false,
         workspaceGlob: undefined,
         runner: "vitest",
+        fullFile: false,
       });
     });
 
@@ -133,6 +135,7 @@ describe("CLI terminal report and exit codes", () => {
         cache: false,
         workspaceGlob: undefined,
         runner: "vitest",
+        fullFile: false,
       });
     });
 
@@ -168,6 +171,7 @@ describe("CLI terminal report and exit codes", () => {
         cache: false,
         workspaceGlob: undefined,
         runner: "vitest",
+        fullFile: false,
       });
       expect(parseArgs([]).breakOnScore).toBeUndefined();
       expect(parseArgs([]).failOnNoCoverage).toBe(false);
@@ -179,6 +183,49 @@ describe("CLI terminal report and exit codes", () => {
       expect(parseArgs(["--cache"]).cache).toBe(true);
       expect(parseArgs(["--html", "r.html"]).htmlPath).toBe("r.html");
       expect(parseArgs(["--runner", "jest"]).runner).toBe("jest");
+      expect(parseArgs(["--full-file"]).fullFile).toBe(true);
+    });
+
+    it("should print usage and exit 0 for --help and -h (SC-501)", async () => {
+      const { runCli } = await import("../src/cli.js");
+      for (const argv of [["--help"], ["-h"]]) {
+        let stdout = "";
+        const prevWrite = process.stdout.write.bind(process.stdout);
+        process.stdout.write = ((chunk: string | Uint8Array) => {
+          stdout += String(chunk);
+          return true;
+        }) as typeof process.stdout.write;
+        try {
+          const code = await runCli({ argv, cwd: repoRoot });
+          expect(code).toBe(0);
+          expect(stdout).toMatch(/Usage: puca/);
+          expect(stdout).toMatch(/--full-file/);
+        } finally {
+          process.stdout.write = prevWrite;
+        }
+      }
+    });
+
+    it("should print package version and exit 0 for --version and -V (SC-501)", async () => {
+      const { runCli } = await import("../src/cli.js");
+      const pkg = JSON.parse(
+        await fs.readFile(path.join(repoRoot, "package.json"), "utf8"),
+      ) as { version: string };
+      for (const argv of [["--version"], ["-V"]]) {
+        let stdout = "";
+        const prevWrite = process.stdout.write.bind(process.stdout);
+        process.stdout.write = ((chunk: string | Uint8Array) => {
+          stdout += String(chunk);
+          return true;
+        }) as typeof process.stdout.write;
+        try {
+          const code = await runCli({ argv, cwd: repoRoot });
+          expect(code).toBe(0);
+          expect(stdout.trim()).toBe(pkg.version);
+        } finally {
+          process.stdout.write = prevWrite;
+        }
+      }
     });
 
     it("should refuse unknown non-flags (SC-327)", () => {

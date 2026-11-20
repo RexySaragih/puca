@@ -145,4 +145,102 @@ function asPositiveInt(value: unknown): number | undefined {
   return value;
 }
 
+export interface JestSpecDiscovery {
+  readonly testMatch?: readonly string[];
+  readonly testRegex?: readonly string[];
+}
+
+/**
+ * Project Jest spec globs (testMatch / testRegex). Missing config → undefined
+ * so the related-map scanner falls back to hardcoded test dirs.
+ */
+export async function resolveJestSpecDiscovery(
+  cwd: string,
+): Promise<JestSpecDiscovery | undefined> {
+  const fromPackage = readSpecDiscoveryFromPackageJson(cwd);
+  if (fromPackage != null) {
+    return fromPackage;
+  }
+  const fromJson = readSpecDiscoveryFromJestConfigJson(cwd);
+  if (fromJson != null) {
+    return fromJson;
+  }
+  return readSpecDiscoveryViaProjectJestConfig(cwd);
+}
+
+function readSpecDiscoveryFromPackageJson(
+  cwd: string,
+): JestSpecDiscovery | undefined {
+  try {
+    const raw = fs.readFileSync(path.join(cwd, "package.json"), "utf8");
+    const pkg = JSON.parse(raw) as { jest?: unknown };
+    return specDiscoveryFromConfig(pkg.jest);
+  } catch {
+    return undefined;
+  }
+}
+
+function readSpecDiscoveryFromJestConfigJson(
+  cwd: string,
+): JestSpecDiscovery | undefined {
+  try {
+    const raw = fs.readFileSync(path.join(cwd, "jest.config.json"), "utf8");
+    return specDiscoveryFromConfig(JSON.parse(raw) as unknown);
+  } catch {
+    return undefined;
+  }
+}
+
+async function readSpecDiscoveryViaProjectJestConfig(
+  cwd: string,
+): Promise<JestSpecDiscovery | undefined> {
+  try {
+    const requireFromCwd = createRequire(path.join(cwd, "package.json"));
+    const mod = requireFromCwd("jest-config") as {
+      readConfig?: (
+        argv: Record<string, unknown>,
+        packageRootOrConfig: string,
+      ) => Promise<{
+        projectConfig?: { testMatch?: unknown; testRegex?: unknown };
+      }>;
+    };
+    if (typeof mod.readConfig !== "function") {
+      return undefined;
+    }
+    const result = await mod.readConfig({}, cwd);
+    return specDiscoveryFromConfig(result.projectConfig);
+  } catch {
+    return undefined;
+  }
+}
+
+function specDiscoveryFromConfig(config: unknown): JestSpecDiscovery | undefined {
+  if (config == null || typeof config !== "object" || Array.isArray(config)) {
+    return undefined;
+  }
+  const record = config as { testMatch?: unknown; testRegex?: unknown };
+  const testMatch = asStringList(record.testMatch);
+  const testRegex = asStringList(record.testRegex);
+  if (testMatch == null && testRegex == null) {
+    return undefined;
+  }
+  return {
+    ...(testMatch != null ? { testMatch } : {}),
+    ...(testRegex != null ? { testRegex } : {}),
+  };
+}
+
+function asStringList(value: unknown): readonly string[] | undefined {
+  if (typeof value === "string" && value.trim() !== "") {
+    return [value];
+  }
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const items = value.filter(
+    (entry): entry is string => typeof entry === "string" && entry.trim() !== "",
+  );
+  return items.length > 0 ? items : undefined;
+}
+
 export { PucaRefuseError };

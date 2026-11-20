@@ -33,8 +33,7 @@ pub fn discover_outcome(filename: &str, source: &str) -> Result<DiscoverOutcome,
     let parsed = parse(&allocator, filename, source)?;
     let all = collect_sites(filename, source, &parsed.program);
 
-    let (after_heuristics, skipped_by_heuristic) =
-        filter_heuristics(source, &parsed.program, all);
+    let (after_heuristics, skipped_by_heuristic) = filter_heuristics(source, &parsed.program, all);
 
     let scan = scan_disables(source);
     let disabled_by_directive = after_heuristics

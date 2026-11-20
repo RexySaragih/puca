@@ -10,6 +10,8 @@ import {
   hostPlatformAbi,
   loadPucaBinding,
   NapiMutatorEngine,
+  platformAbi,
+  SUPPORTED_ABIS,
   utf8ByteSlice,
 } from "../src/adapters/outbound/napi/NapiMutatorEngine.js";
 import { toAbsolutePath } from "../src/domain/mutant.js";
@@ -190,7 +192,7 @@ describe("NapiMutatorEngine", () => {
         (site) => site.mutatorName === "ArithmeticOperator",
       );
 
-      expect(arithmetic).toHaveLength(2);
+      expect(arithmetic).toHaveLength(1);
       for (const site of arithmetic) {
         expect(site.original).toBe("+");
         expect(site.replacement).toBe("-");
@@ -266,6 +268,21 @@ describe("NapiMutatorEngine", () => {
       expect(source).not.toMatch(/process\.exit/);
       expect(source).not.toMatch(/\bmusl\b/);
       expect(hostPlatformAbi()).not.toMatch(/musl/);
+    });
+  });
+
+  describe("when the host ABI is not a shipped addon", () => {
+    it("should list the four supported ABIs", () => {
+      expect(() => platformAbi("linux", "arm64")).toThrow(
+        /Supported ABIs: darwin-arm64, darwin-x64, linux-x64-gnu, win32-x64-msvc/,
+      );
+      expect(() => platformAbi("win32", "arm64")).toThrow(/Supported ABIs/);
+      expect(SUPPORTED_ABIS).toEqual([
+        "darwin-arm64",
+        "darwin-x64",
+        "linux-x64-gnu",
+        "win32-x64-msvc",
+      ]);
     });
   });
 });

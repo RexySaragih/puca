@@ -38,7 +38,7 @@ flowchart BT
   Adapters --> Application --> Domain
 ```
 
-- `domain` imports nothing from `node:*`, `vitest`, `vite`, napi, or `child_process`.
+- `domain` imports nothing from `node:*` (`fs`, `os`, `child_process`, `worker_threads`), `vitest`, `vite`, or napi.
 - `application` stays free of those too (enforced by `npm run lint:deps` / dependency-cruiser).
 - `puca-core` knows oxc only — not Vitest or Git.
 
@@ -71,7 +71,7 @@ flowchart LR
 flowchart TB
   subgraph src [src]
     domain[domain]
-    app[application/ports + use-cases]
+    app[application/ports + use-cases<br/>discoverSession · scoreMutants]
     adapters[adapters inbound/outbound]
     composition[composition/createRuntime]
     cli[cli.ts]
@@ -99,7 +99,7 @@ Composition root is the **only** place that chooses prod vs fake adapters. Do no
 | `RunMutationSession` | Inbound: run a session (or sequential workspace sessions) | CLI + `WorkspaceTargetResolver` | — |
 | `MutatorEnginePort` | `discover` / `apply` | `NapiMutatorEngine` | `FakeMutatorEngine` |
 | `TestRunnerPort` | Session, reverse map, baseline, runRelated, respawn (**unexported**) | `VitestTestRunner` (default) / `JestTestRunner` (`--runner jest`) | `FakeTestRunner` |
-| `SourceLocatorPort` | Candidate files | `GitDiffLocator` | `InMemorySourceLocator` |
+| `SourceLocatorPort` | Candidate files + optional hunk `lineRanges` (ADR-040) | `GitDiffLocator` | `InMemorySourceLocator` |
 | `WorkspaceFilesPort` | `readUtf8` / `exists` / `isUnderCwd` | `NodeWorkspaceFiles` | `InMemoryFiles` |
 | `ReportPort` | Terminal (+ optional JSON / SARIF / HTML); File Summary is StdioReport-only (ADR-030); optional `Disabled` column when session suppressions > 0 (ADR-039); `writeSarif?` (ADR-033); `writeHtml?` (ADR-034) | `StdioReport` + `SchemaJsonFile` + `SarifFile` + `HtmlFile` | `RecordingReport` |
 | `CachePort` | Opt-in status metadata cache (`--cache`); never mutated source (ADR-035) | `FileHashCache` | memory / no-op |
@@ -162,7 +162,7 @@ Path: `{cwd}/.puca/cache.json` (per-package under `--workspace`). Opt-in via `--
 ```json
 {
   "schemaVersion": 1,
-  "engineVersion": "1",
+  "engineVersion": "3",
   "entries": {
     "<sha256-key>": {
       "status": "Killed",
@@ -176,6 +176,7 @@ Path: `{cwd}/.puca/cache.json` (per-package under `--workspace`). Opt-in via `--
 - **Key** = `sha256(engineVersion ⊕ file ⊕ start ⊕ end ⊕ mutator ⊕ replacement ⊕ sourceContents ⊕ relatedTestContents)`
 - **Allowed fields** on entries: `status`, optional `killedBy`, `schemaVersion`
 - **Forbidden**: any `mutatedSource` (or other source buffers) — load fail-opens to empty
+- **Cacheable statuses only:** `Killed`, `Survived`, `NoCoverage`. `Timeout` and `RuntimeError` are never written; stale hits with those statuses are ignored on load (ADR-035 amendment, `engineVersion` `"3"`)
 - Corrupt / truncated / version mismatch → ignore file, full score, rewrite on flush
 - Bump `CACHE_SCHEMA_VERSION` or `CACHE_ENGINE_VERSION` in `FileHashCache.ts` to wipe incompatible hits
 
@@ -186,7 +187,7 @@ Path: `{cwd}/.puca/cache.json` (per-package under `--workspace`). Opt-in via `--
 | Layer | May import | Must not import |
 | --- | --- | --- |
 | `domain/` | nothing framework | `node:*`, vitest, vite, napi, `child_process` |
-| `application/` | `domain/`, ports only | vitest, vite, napi, `child_process`, `node:fs` for cache I/O |
+| `application/` | `domain/`, ports only | vitest, vite, napi, `node:fs` / `node:os` / `child_process` / `worker_threads` |
 | `adapters/` | ports + Node/Vitest/Jest/NAPI | — |
 | `composition/createRuntime.ts` | adapters + use case | invent alternate adapter names |
 | `crates/puca-core` | oxc | Vitest / Git / Node |
@@ -199,8 +200,9 @@ Path: `{cwd}/.puca/cache.json` (per-package under `--workspace`). Opt-in via `--
 
 - Parse with oxc; `.ts` vs `.tsx` `SourceType` from extension.
 - Sites are **UTF-8 byte offsets** into the original source — discovery does not serialize mutants (ADR-002).
-- Operators: arithmetic, equality, boolean, logical, conditional predicates (not `for` headers).
-- **ADR-029:** `visit_template_literal` does not walk `${…}` expressions (tagged and untagged); non-template operators including string `+` still discover.
+- Operators: arithmetic, equality, boolean, logical, unary `!`, conditional predicates (Identifier / `!id` only; not `for` headers).
+- **ADR-029:** `visit_template_literal` does not walk `${…}` expressions (tagged and untagged). Non-empty string/`template` `+` is omitted; `x + ""` and identifier `a + b` still discover.
+- Crate workspace version stays `0.1.0` (independent of the npm CLI `0.3.0` package).
 - `apply` splices `replacement` over `[start, end)` — no full AST reprint.
 - Disable comments are line-oriented `//` only.
 
@@ -245,11 +247,13 @@ Missing `.node` after clone → exit 2 until `npm run build`.
 | ADR-032 | `evaluateQualityGates` + use-case exit authority; Survived never suppressed by score ≥ n |
 | ADR-033 | Additive `writeSarif?` + `SarifFile`; Survived-only SARIF 2.1.0; explicit `--sarif <path>` |
 | ADR-034 | Native self-contained HTML (`HtmlFile`); ban scoped `@stryker-mutator/*` UI; keep `mutation-testing-report-schema` for `--json` |
-| ADR-035 | `CachePort` + `FileHashCache` metadata-only `.puca/cache.json`; opt-in `--cache` |
+| ADR-035 | `CachePort` + `FileHashCache` metadata-only `.puca/cache.json`; opt-in `--cache`. Amendment: persist only `Killed` / `Survived` / `NoCoverage`; `engineVersion` `"3"` |
 | ADR-036 | `WorkspaceDiscoveryPort` + sequential package sessions; worst-of exit `2 > 1 > 0` |
 | ADR-037 | `JestTestRunner` single-worker; soft-force `workers=1` under `--runner jest` |
 | ADR-038 | Phase 3 distribution remains GitHub Releases only; npm registry publish deferred to Phase 4 |
 | ADR-039 | Discovery noise suppression: collect→heuristic filter→directive filter; `disabledByDirective` + `skippedByHeuristic` + `warnings`; terminal-only File Summary `Disabled` column; no `oxc_semantic`; no sixth scored status; `--json`/HTML/SARIF unchanged. **ADR-035 remains CachePort** — this ID is noise suppression only. |
+| ADR-040 | Default git targeting scores sites whose 1-based `site.line` overlaps a new-file hunk from `git diff -U0 HEAD`. `--mutate` and untracked stay whole-file. `--full-file` restores whole-dirty-file scoring. |
+| ADR-041 | Per-file discover/read skip: missing or unparsable candidates emit a notice and continue. Git-default with nothing left → idle 0; `--mutate` matches that all fail to parse → refuse 2. |
 
 ---
 

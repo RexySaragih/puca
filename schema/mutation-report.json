@@ -74,7 +74,7 @@
                 "mutatorName": {
                   "type": "string",
                   "description": "Category of the mutation.",
-                  "examples": ["ConditionalExpression", "EqualityOperator", "LogicalOperator"]
+                  "examples": ["ConditionalExpression", "EqualityOperator", "LogicalOperator", "UnaryOperator"]
                 },
                 "replacement": {
                   "type": "string",

@@ -12,7 +12,8 @@ fn arithmetic_plus_to_minus(sites: &[Site]) -> Vec<&Site> {
 #[test]
 fn ac1_puca_disable_next_line_omits_arithmetic_on_following_plus() {
     // Given — directive immediately above the `+` line (inside a function for parse)
-    let source = "function f(a: number, b: number) {\n  // puca-disable-next-line\n  return a + b;\n}\n";
+    let source =
+        "function f(a: number, b: number) {\n  // puca-disable-next-line\n  return a + b;\n}\n";
 
     // When
     let sites = discover("ac1.ts", source).expect("discover");
@@ -72,13 +73,19 @@ fn ac3_apply_splices_replacement_original_unchanged() {
     let mutated = apply(&source, site);
 
     // Then
-    assert_eq!(&source[site.start_offset as usize..site.end_offset as usize], "+");
+    assert_eq!(
+        &source[site.start_offset as usize..site.end_offset as usize],
+        "+"
+    );
     assert_eq!(
         &mutated[site.start_offset as usize..site.start_offset as usize + site.replacement.len()],
         "-"
     );
     assert_eq!(mutated, "const x = a - b;");
-    assert_eq!(source, "const x = a + b;", "AC3: original string must be unchanged");
+    assert_eq!(
+        source, "const x = a + b;",
+        "AC3: original string must be unchanged"
+    );
 }
 
 #[test]

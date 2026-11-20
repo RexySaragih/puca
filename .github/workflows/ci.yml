@@ -8,12 +8,44 @@ on:
 
 jobs:
   test:
-    name: test (${{ matrix.os }})
+    name: test (${{ matrix.os }}, node-${{ matrix.node }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         os: [macos-14, ubuntu-latest]
+        node: ["20", "22"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Install JS deps
+        run: npm ci
+      - name: Build TypeScript + NAPI
+        run: npm run build
+      - name: Typecheck
+        run: npm run typecheck
+      - name: Lint dependency boundaries
+        run: npm run lint:deps
+      - name: Rust fmt and clippy
+        if: matrix.os == 'ubuntu-latest' && matrix.node == '20'
+        run: |
+          cargo fmt --check
+          cargo clippy -p puca-core -- -D warnings
+      - name: Rust mutator tests
+        run: cargo test -p puca-core
+      - name: Test
+        run: npm test
+
+  test-windows:
+    name: test (windows-latest, non-gating)
+    runs-on: windows-latest
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -25,12 +57,6 @@ jobs:
         run: npm ci
       - name: Build TypeScript + NAPI
         run: npm run build
-      - name: Typecheck
-        run: npm run typecheck
-      - name: Lint dependency boundaries
-        run: npm run lint:deps
-      - name: Rust mutator tests
-        run: cargo test -p puca-core
       - name: Test
         run: npm test
 
@@ -120,14 +146,14 @@ jobs:
             Linux-x86_64) ABI=linux-x64-gnu ;;
             *) echo "unsupported host"; exit 1 ;;
           esac
-          ROOT_TGZ="artifacts/puca-0.2.0.tgz"
-          ABI_TGZ="artifacts/puca-${ABI}-0.2.0.tgz"
+          ROOT_TGZ="artifacts/puca-0.3.0.tgz"
+          ABI_TGZ="artifacts/puca-${ABI}-0.3.0.tgz"
           test -f "${ROOT_TGZ}"
           test -f "${ABI_TGZ}"
           mkdir -p smoke-workspace
           cp "${ROOT_TGZ}" "${ABI_TGZ}" smoke-workspace/
           cd smoke-workspace
-          npm install "./puca-0.2.0.tgz" "./puca-${ABI}-0.2.0.tgz" --no-fund --no-audit
+          npm install "./puca-0.3.0.tgz" "./puca-${ABI}-0.3.0.tgz" --no-fund --no-audit
       - name: Run puca against fixtures/loop oracle
         shell: bash
         run: |

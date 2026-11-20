@@ -27,6 +27,8 @@ export interface MutationSessionInput {
   readonly workspaceGlob?: string;
   /** Test runner selection (`--runner`). Default vitest. */
   readonly runner?: "vitest" | "jest";
+  /** Score all sites in dirty files (skip git hunk filter). */
+  readonly fullFile?: boolean;
 }
 
 /**

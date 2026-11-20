@@ -64,6 +64,11 @@ export interface TestRunnerPort {
    */
   configureOuterTimeoutMs?(timeoutMs: number): void;
   runRelated(mutant: MutantRunRequest): Promise<RelatedRunResult>;
+  /**
+   * Abort an in-flight related run so a hang does not outlive the outer timer.
+   * Sequential timeout path calls this before respawn.
+   */
+  cancelCurrentRun?(): Promise<void>;
   respawn(): Promise<RunnerSession>;
   close(): Promise<void>;
   /**

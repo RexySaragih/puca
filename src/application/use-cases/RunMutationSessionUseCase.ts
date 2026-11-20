@@ -1,10 +1,4 @@
-import type {
-  AbsolutePath,
-  Mutant,
-  MutantStatus,
-  SessionResult,
-  Site,
-} from "../../domain/mutant.js";
+import type { SessionResult } from "../../domain/mutant.js";
 import {
   EmptyMutateMatchError,
   NO_FILES_TO_MUTATE_MESSAGE,
@@ -22,13 +16,23 @@ import type {
 import type { CachePort } from "../ports/outbound/CachePort.js";
 import type { MutatorEnginePort } from "../ports/outbound/MutatorEnginePort.js";
 import type { ReportPort } from "../ports/outbound/ReportPort.js";
-import type { SourceLocatorPort } from "../ports/outbound/SourceLocatorPort.js";
 import type {
-  RelatedRunResult,
-  ReverseMapResult,
-  TestRunnerPort,
-} from "../ports/outbound/TestRunnerPort.js";
+  SourceCandidate,
+  SourceLocatorPort,
+} from "../ports/outbound/SourceLocatorPort.js";
+import type { TestRunnerPort } from "../ports/outbound/TestRunnerPort.js";
 import type { WorkspaceFilesPort } from "../ports/outbound/WorkspaceFilesPort.js";
+import {
+  buildDisabledByFile,
+  collectBaselineSpecs,
+  discoverCandidateSites,
+  emitDiscoverDiagnostics,
+  emitSelectedFiles,
+  emitUntrackedNotice,
+  formatVerboseFooter,
+  shouldRespawnForGlobalSetup,
+} from "./discoverSession.js";
+import { resolveOuterTimeoutMs, scoreDiscovered } from "./scoreMutants.js";
 
 export interface RunMutationSessionDeps {
   readonly mutator: MutatorEnginePort;
@@ -42,11 +46,6 @@ export interface RunMutationSessionDeps {
 
 const EXIT_OK = 0;
 const EXIT_REFUSE = 2;
-
-const OUTER_TIMER_PADDING_MS = 2000;
-const OUTER_TIMER_FLOOR_MS = 7000;
-/** Adapter stamps the on-disk schema; satisfies CachedMutantStatus at the port. */
-const CACHE_ENTRY_SCHEMA_PLACEHOLDER = 0;
 
 const BASELINE_FAILED_FALLBACK = "Baseline failed";
 
@@ -66,14 +65,15 @@ export class RunMutationSessionUseCase implements RunMutationSession {
         input.cwd,
         input.mutateGlob,
         input.includeUntracked === true,
+        input.fullFile === true,
       );
     } catch (error) {
       return this.reportRefuse(error, input.jsonPath);
     }
 
-    this.emitUntrackedNotice();
+    emitUntrackedNotice(this.deps);
     if (input.verbose === true) {
-      this.emitSelectedFiles(input.cwd, candidates);
+      emitSelectedFiles(this.deps, input.cwd, candidates);
     }
 
     if (candidates.length === 0) {
@@ -89,6 +89,9 @@ export class RunMutationSessionUseCase implements RunMutationSession {
 
     await this.deps.testRunner.startSession({ buffers: new Map() });
     try {
+      if (input.runner === "jest") {
+        this.deps.report.writeNotice?.("related-map: static-scan");
+      }
       return await this.runAfterSession(candidates, input);
     } catch (error) {
       if (isRunnerRefuse(error)) {
@@ -108,16 +111,45 @@ export class RunMutationSessionUseCase implements RunMutationSession {
   }
 
   private async runAfterSession(
-    candidates: readonly AbsolutePath[],
+    candidates: readonly SourceCandidate[],
     input: MutationSessionInput,
   ): Promise<SessionResult> {
     const workers = input.workers ?? 1;
-    const reverse = await this.deps.testRunner.buildReverseMap(candidates);
+    const files = candidates.map((candidate) => candidate.file);
+    const reverse = await this.deps.testRunner.buildReverseMap(files);
 
-    const discovered = await this.discoverCandidateSites(candidates, reverse);
+    const discovered = await discoverCandidateSites(
+      this.deps,
+      candidates,
+      reverse,
+      input.cwd,
+    );
     if (input.verbose === true) {
-      this.emitDiscoverDiagnostics(discovered);
+      emitDiscoverDiagnostics(this.deps, discovered);
     }
+
+    if (discovered.length === 0) {
+      if (input.mutateGlob != null && candidates.length > 0) {
+        return this.reportResult(
+          {
+            statuses: [],
+            exitCode: EXIT_REFUSE,
+            message:
+              "Refused to score: all --mutate matches failed to read or parse.",
+          },
+          artifactPaths(input),
+        );
+      }
+      return this.reportResult(
+        {
+          statuses: [],
+          exitCode: EXIT_OK,
+          message: NO_FILES_TO_MUTATE_MESSAGE,
+        },
+        artifactPaths(input),
+      );
+    }
+
     const baselineSpecs = collectBaselineSpecs(discovered);
 
     const baseline = await this.deps.testRunner.baseline(baselineSpecs);
@@ -132,8 +164,7 @@ export class RunMutationSessionUseCase implements RunMutationSession {
       );
     }
 
-    // N>=2: pool adapter refuses globalSetup (ADR-017). N=1 keeps one-shot respawn.
-    if (workers < 2 && shouldRespawnForGlobalSetup(candidates, reverse)) {
+    if (workers < 2 && shouldRespawnForGlobalSetup(files, reverse)) {
       await this.respawnRunner();
     }
 
@@ -141,7 +172,6 @@ export class RunMutationSessionUseCase implements RunMutationSession {
       input.timeoutMs,
       this.deps.testRunner.getTestTimeoutMs(),
     );
-    // Pool IPC hang timer must match banner / sequential race (CLI --timeout).
     this.deps.testRunner.configureOuterTimeoutMs?.(outerTimeoutMs);
 
     const cache =
@@ -150,21 +180,31 @@ export class RunMutationSessionUseCase implements RunMutationSession {
       await cache.load();
     }
 
-    const statuses = await this.scoreDiscovered(
+    const statuses = await scoreDiscovered(
+      this.deps,
       discovered,
       outerTimeoutMs,
       workers,
       cache,
+      () => this.respawnRunner(),
     );
 
     if (cache != null) {
       await cache.flush();
     }
 
+    const counts = countsFromStatuses(statuses);
+    if (counts.noCoverage >= 1 && input.failOnNoCoverage !== true) {
+      const noun = counts.noCoverage === 1 ? "mutant" : "mutants";
+      this.deps.report.writeNotice?.(
+        `ℹ ${String(counts.noCoverage)} NoCoverage ${noun}. Pass --fail-on-no-coverage to fail the run.`,
+      );
+    }
+
     return this.reportResult(
       {
         statuses,
-        exitCode: evaluateQualityGates(countsFromStatuses(statuses), {
+        exitCode: evaluateQualityGates(counts, {
           breakOnScore: input.breakOnScore,
           failOnNoCoverage: input.failOnNoCoverage,
         }),
@@ -183,345 +223,9 @@ export class RunMutationSessionUseCase implements RunMutationSession {
     );
   }
 
-  private async scoreDiscovered(
-    discovered: readonly DiscoveredFile[],
-    outerTimeoutMs: number,
-    workers: number,
-    cache: CachePort | undefined,
-  ): Promise<Mutant[]> {
-    const total = countAllSites(discovered);
-    this.deps.report.writeSessionStart?.({
-      fileCount: discovered.length,
-      mutantCount: total,
-      timeoutMs: outerTimeoutMs,
-    });
-
-    if (workers >= 2) {
-      return this.scoreDiscoveredConcurrent(discovered, total, workers, cache);
-    }
-    return this.scoreDiscoveredSequential(
-      discovered,
-      total,
-      outerTimeoutMs,
-      cache,
-    );
-  }
-
-  private async scoreDiscoveredSequential(
-    discovered: readonly DiscoveredFile[],
-    total: number,
-    outerTimeoutMs: number,
-    cache: CachePort | undefined,
-  ): Promise<Mutant[]> {
-    const statuses: Mutant[] = [];
-    const counts = emptyBuckets();
-
-    for (const entry of discovered) {
-      for (const site of entry.sites) {
-        const scored = await this.scoreSiteWithCache(
-          site,
-          entry.related,
-          entry.originalSource,
-          cache,
-          async () => {
-            if (entry.related.length === 0) {
-              return { site, status: "NoCoverage" };
-            }
-            return this.scoreOneMutantInProcess(
-              entry.file,
-              entry.originalSource,
-              site,
-              entry.related,
-              outerTimeoutMs,
-            );
-          },
-        );
-        this.pushScored(statuses, counts, total, scored);
-      }
-    }
-    return statuses;
-  }
-
-  /**
-   * N>=2: promise pool — parent apply + runRelated only (child owns overlay).
-   * No setBuffer / invalidateFile / respawn in the parent use case.
-   */
-  private async scoreDiscoveredConcurrent(
-    discovered: readonly DiscoveredFile[],
-    total: number,
-    workers: number,
-    cache: CachePort | undefined,
-  ): Promise<Mutant[]> {
-    const statuses: Mutant[] = new Array(total);
-    const counts = emptyBuckets();
-    let nextIndex = 0;
-
-    type Job = {
-      readonly slot: number;
-      readonly file: AbsolutePath;
-      readonly originalSource: string;
-      readonly site: Site;
-      readonly related: readonly string[];
-    };
-
-    const jobs: Job[] = [];
-    let slot = 0;
-    for (const entry of discovered) {
-      for (const site of entry.sites) {
-        jobs.push({
-          slot,
-          file: entry.file,
-          originalSource: entry.originalSource,
-          site,
-          related: entry.related,
-        });
-        slot += 1;
-      }
-    }
-
-    const runJob = async (job: Job): Promise<void> => {
-      const scored = await this.scoreSiteWithCache(
-        job.site,
-        job.related,
-        job.originalSource,
-        cache,
-        async () => {
-          if (job.related.length === 0) {
-            return { site: job.site, status: "NoCoverage" };
-          }
-          return this.scoreOneMutantPooled(
-            job.file,
-            job.originalSource,
-            job.site,
-            job.related,
-          );
-        },
-      );
-      statuses[job.slot] = scored;
-      bumpBucket(counts, scored.status);
-      // Progress index is completion order for streaming UX.
-      nextIndex += 1;
-      this.deps.report.writeMutantResult?.(scored, {
-        index: nextIndex,
-        total,
-        counts: { ...counts },
-      });
-    };
-
-    await runPromisePool(jobs, workers, runJob);
-    return statuses;
-  }
-
-  /**
-   * Cache hit → reuse status (skip scoring). Miss → score then set.
-   * NoCoverage is cacheable (empty relatedContents).
-   */
-  private async scoreSiteWithCache(
-    site: Site,
-    related: readonly string[],
-    originalSource: string,
-    cache: CachePort | undefined,
-    scoreMiss: () => Promise<Mutant>,
-  ): Promise<Mutant> {
-    if (cache == null) {
-      return scoreMiss();
-    }
-
-    const relatedContents = await this.readRelatedContents(related);
-    const key = cache.keyFor({
-      file: site.file,
-      startOffset: site.startOffset,
-      endOffset: site.endOffset,
-      mutatorName: site.mutatorName,
-      replacement: site.replacement,
-      sourceContents: originalSource,
-      relatedContents,
-    });
-
-    const hit = cache.get(key);
-    if (hit != null) {
-      return {
-        site,
-        status: hit.status,
-        ...(hit.killedBy != null ? { killedBy: hit.killedBy } : {}),
-      };
-    }
-
-    const scored = await scoreMiss();
-    cache.set(key, {
-      status: scored.status,
-      ...(scored.killedBy != null ? { killedBy: scored.killedBy } : {}),
-      schemaVersion: CACHE_ENTRY_SCHEMA_PLACEHOLDER,
-    });
-    return scored;
-  }
-
-  private async readRelatedContents(
-    related: readonly string[],
-  ): Promise<string> {
-    if (related.length === 0) {
-      return "";
-    }
-    const parts: string[] = [];
-    for (const spec of related) {
-      try {
-        parts.push(await this.deps.files.readUtf8(spec));
-      } catch {
-        parts.push("");
-      }
-    }
-    return parts.join("\0");
-  }
-
-  private pushScored(
-    statuses: Mutant[],
-    counts: BucketState,
-    total: number,
-    scored: Mutant,
-  ): void {
-    bumpBucket(counts, scored.status);
-    statuses.push(scored);
-    this.deps.report.writeMutantResult?.(scored, {
-      index: statuses.length,
-      total,
-      counts: { ...counts },
-    });
-  }
-
-  private async scoreOneMutantInProcess(
-    file: AbsolutePath,
-    originalSource: string,
-    site: Site,
-    relatedSpecs: readonly string[],
-    outerTimeoutMs: number,
-  ): Promise<Mutant> {
-    let mutatedSource: string;
-    try {
-      mutatedSource = await this.deps.mutator.apply(originalSource, site);
-    } catch {
-      return { site, status: "RuntimeError" };
-    }
-
-    this.deps.testRunner.setBuffer(file, mutatedSource);
-    this.deps.testRunner.invalidateFile(file);
-
-    try {
-      const raced = await raceWithTimeout(
-        this.deps.testRunner.runRelated({
-          file,
-          mutatedSource,
-          relatedSpecs,
-          mutantId: site.id,
-        }),
-        outerTimeoutMs,
-      );
-
-      if (raced.timedOut) {
-        await this.respawnRunner();
-        return { site, status: "Timeout" };
-      }
-
-      return await this.classifyOrRespawn(site, raced.value);
-    } catch {
-      return { site, status: "RuntimeError" };
-    } finally {
-      this.deps.testRunner.setBuffer(file, null);
-      this.deps.testRunner.invalidateFile(file);
-    }
-  }
-
-  private async scoreOneMutantPooled(
-    file: AbsolutePath,
-    originalSource: string,
-    site: Site,
-    relatedSpecs: readonly string[],
-  ): Promise<Mutant> {
-    let mutatedSource: string;
-    try {
-      mutatedSource = await this.deps.mutator.apply(originalSource, site);
-    } catch {
-      return { site, status: "RuntimeError" };
-    }
-
-    try {
-      const result = await this.deps.testRunner.runRelated({
-        file,
-        mutatedSource,
-        relatedSpecs,
-        mutantId: site.id,
-      });
-      // Pool adapter owns timeout/respawn — use case never respawns for N>=2.
-      return classifyRelatedResult(site, result);
-    } catch {
-      return { site, status: "RuntimeError" };
-    }
-  }
-
-  private async classifyOrRespawn(
-    site: Site,
-    result: RelatedRunResult,
-  ): Promise<Mutant> {
-    if (result.kind === "timeout") {
-      await this.respawnRunner();
-      return { site, status: "Timeout" };
-    }
-    return classifyRelatedResult(site, result);
-  }
-
-  private async discoverCandidateSites(
-    candidates: readonly AbsolutePath[],
-    reverse: ReverseMapResult,
-  ): Promise<DiscoveredFile[]> {
-    const discovered: DiscoveredFile[] = [];
-    for (const file of candidates) {
-      const source = await this.deps.files.readUtf8(file);
-      const found = await this.deps.mutator.discover(file, source);
-      const related = lookupRelated(reverse, file);
-      for (const warning of found.warnings) {
-        this.deps.report.writeNotice?.(warning);
-      }
-      discovered.push({
-        file,
-        originalSource: source,
-        sites: found.sites,
-        related,
-        disabledByDirective: found.disabledByDirective,
-        skippedByHeuristic: found.skippedByHeuristic,
-      });
-    }
-    return discovered;
-  }
-
   private async respawnRunner(): Promise<void> {
     this.respawns += 1;
     await this.deps.testRunner.respawn();
-  }
-
-  private emitUntrackedNotice(): void {
-    const skipped = this.deps.sourceLocator.untrackedSkipped ?? 0;
-    if (skipped <= 0) {
-      return;
-    }
-    const noun = skipped === 1 ? "file" : "files";
-    this.deps.report.writeNotice?.(
-      `ℹ ${String(skipped)} untracked ${noun} skipped. Pass --include-untracked or --mutate <glob> to target them.`,
-    );
-  }
-
-  private emitSelectedFiles(
-    cwd: string,
-    candidates: readonly AbsolutePath[],
-  ): void {
-    this.deps.report.writeNotice?.(`Selected files (${String(candidates.length)}):`);
-    for (const file of candidates) {
-      this.deps.report.writeNotice?.(`  ${relativeToCwd(cwd, file)}`);
-    }
-  }
-
-  private emitDiscoverDiagnostics(discovered: readonly DiscoveredFile[]): void {
-    const summary = summarizeDiscover(discovered);
-    this.deps.report.writeNotice?.(`Mutators: ${summary.histogramLine}`);
-    this.deps.report.writeNotice?.(formatSuppressionSummary(summary));
   }
 
   private async reportRefuse(
@@ -577,246 +281,6 @@ function artifactPaths(input: MutationSessionInput): ReportArtifacts {
   };
 }
 
-interface DiscoveredFile {
-  readonly file: AbsolutePath;
-  readonly originalSource: string;
-  readonly sites: readonly Site[];
-  readonly related: readonly string[];
-  readonly disabledByDirective: number;
-  readonly skippedByHeuristic: number;
-}
-
-interface DiscoverSummary {
-  readonly histogramLine: string;
-  readonly disabledByDirective: number;
-  readonly skippedByHeuristic: number;
-}
-
-function summarizeDiscover(discovered: readonly DiscoveredFile[]): DiscoverSummary {
-  const histogram = new Map<string, number>();
-  let disabledByDirective = 0;
-  let skippedByHeuristic = 0;
-  for (const entry of discovered) {
-    disabledByDirective += entry.disabledByDirective;
-    skippedByHeuristic += entry.skippedByHeuristic;
-    for (const site of entry.sites) {
-      histogram.set(site.mutatorName, (histogram.get(site.mutatorName) ?? 0) + 1);
-    }
-  }
-  const histogramLine =
-    [...histogram.entries()]
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([name, count]) => `${name}: ${String(count)}`)
-      .join(", ") || "(none)";
-  return { histogramLine, disabledByDirective, skippedByHeuristic };
-}
-
-function formatSuppressionSummary(summary: DiscoverSummary): string {
-  return (
-    `Suppression summary: ${String(summary.disabledByDirective)} skipped via comment directives, ` +
-    `${String(summary.skippedByHeuristic)} skipped via auto-heuristics.`
-  );
-}
-
-function buildDisabledByFile(
-  discovered: readonly DiscoveredFile[],
-  cwd: string,
-): Record<string, number> | undefined {
-  const map: Record<string, number> = {};
-  let sessionTotal = 0;
-  for (const entry of discovered) {
-    const total = entry.disabledByDirective + entry.skippedByHeuristic;
-    if (total <= 0) {
-      continue;
-    }
-    const rel = relativeToCwd(cwd, entry.file);
-    map[rel] = (map[rel] ?? 0) + total;
-    sessionTotal += total;
-  }
-  return sessionTotal > 0 ? map : undefined;
-}
-
-function formatVerboseFooter(
-  discovered: readonly DiscoveredFile[],
-  respawnCount: number,
-  workers: number,
-  recycleCount: number,
-): string {
-  const summary = summarizeDiscover(discovered);
-  const lines = [
-    `Mutators: ${summary.histogramLine}`,
-    formatSuppressionSummary(summary),
-  ];
-  if (workers >= 2) {
-    lines.push(`Worker recycles (timeout+RSS): ${String(recycleCount)}`);
-  } else {
-    lines.push(`Vitest respawns: ${String(respawnCount)}`);
-  }
-  return lines.join("\n");
-}
-
-type BucketState = {
-  killed: number;
-  survived: number;
-  timeout: number;
-  error: number;
-  noCoverage: number;
-};
-
-function emptyBuckets(): BucketState {
-  return {
-    killed: 0,
-    survived: 0,
-    timeout: 0,
-    error: 0,
-    noCoverage: 0,
-  };
-}
-
-async function runPromisePool<T>(
-  items: readonly T[],
-  concurrency: number,
-  worker: (item: T) => Promise<void>,
-): Promise<void> {
-  if (items.length === 0) {
-    return;
-  }
-  const limit = Math.max(1, concurrency);
-  let next = 0;
-  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    while (next < items.length) {
-      const index = next;
-      next += 1;
-      const item = items[index];
-      if (item === undefined) {
-        return;
-      }
-      await worker(item);
-    }
-  });
-  await Promise.all(runners);
-}
-
-function lookupRelated(
-  reverse: ReverseMapResult,
-  file: AbsolutePath,
-): readonly string[] {
-  const direct = reverse.relatedBySource.get(file);
-  if (direct != null) {
-    return direct;
-  }
-  for (const [source, specs] of reverse.relatedBySource) {
-    if (pathsEqual(source, file)) {
-      return specs;
-    }
-  }
-  return [];
-}
-
-function pathsEqual(a: string, b: string): boolean {
-  return a === b || a.replace(/\\/g, "/") === b.replace(/\\/g, "/");
-}
-
-function relativeToCwd(cwd: string, file: string): string {
-  const normalizedCwd = cwd.replace(/\\/g, "/").replace(/\/$/, "");
-  const normalizedFile = file.replace(/\\/g, "/");
-  if (normalizedFile.startsWith(`${normalizedCwd}/`)) {
-    return normalizedFile.slice(normalizedCwd.length + 1);
-  }
-  return file;
-}
-
-function collectBaselineSpecs(discovered: readonly DiscoveredFile[]): string[] {
-  const specs = new Set<string>();
-  for (const entry of discovered) {
-    for (const spec of entry.related) {
-      specs.add(spec);
-    }
-  }
-  return [...specs];
-}
-
-function shouldRespawnForGlobalSetup(
-  candidates: readonly AbsolutePath[],
-  reverse: ReverseMapResult,
-): boolean {
-  for (const file of candidates) {
-    if (reverse.globalSetupOnly.has(file)) {
-      return true;
-    }
-    for (const marked of reverse.globalSetupOnly) {
-      if (pathsEqual(marked, file)) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
-export function resolveOuterTimeoutMs(
-  overrideMs: number | undefined,
-  testTimeoutMs: number,
-): number {
-  if (overrideMs != null) {
-    return overrideMs;
-  }
-  return Math.max(testTimeoutMs + OUTER_TIMER_PADDING_MS, OUTER_TIMER_FLOOR_MS);
-}
-
-function countAllSites(discovered: readonly DiscoveredFile[]): number {
-  let total = 0;
-  for (const entry of discovered) {
-    total += entry.sites.length;
-  }
-  return total;
-}
-
-function bumpBucket(
-  counts: {
-    killed: number;
-    survived: number;
-    timeout: number;
-    error: number;
-    noCoverage: number;
-  },
-  status: MutantStatus,
-): void {
-  switch (status) {
-    case "Killed":
-      counts.killed += 1;
-      break;
-    case "Survived":
-      counts.survived += 1;
-      break;
-    case "Timeout":
-      counts.timeout += 1;
-      break;
-    case "RuntimeError":
-      counts.error += 1;
-      break;
-    case "NoCoverage":
-      counts.noCoverage += 1;
-      break;
-  }
-}
-
-function classifyRelatedResult(site: Site, result: RelatedRunResult): Mutant {
-  switch (result.kind) {
-    case "failed":
-      return {
-        site,
-        status: "Killed" satisfies MutantStatus,
-        killedBy: result.failingTestId,
-      };
-    case "passed":
-      return { site, status: "Survived" };
-    case "timeout":
-      return { site, status: "Timeout" };
-    case "error":
-      return { site, status: "RuntimeError" };
-  }
-}
-
 /** Duck-type adapter refuse (exit 2) without importing adapter modules. */
 function isRunnerRefuse(error: unknown): error is Error {
   return (
@@ -826,21 +290,5 @@ function isRunnerRefuse(error: unknown): error is Error {
   );
 }
 
-async function raceWithTimeout<T>(
-  promise: Promise<T>,
-  timeoutMs: number,
-): Promise<{ timedOut: true } | { timedOut: false; value: T }> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      promise.then((value) => ({ timedOut: false as const, value })),
-      new Promise<{ timedOut: true }>((resolve) => {
-        timer = setTimeout(() => resolve({ timedOut: true }), timeoutMs);
-      }),
-    ]);
-  } finally {
-    if (timer != null) {
-      clearTimeout(timer);
-    }
-  }
-}
+export { resolveOuterTimeoutMs };
+export type { DiscoveredFile } from "./discoverSession.js";

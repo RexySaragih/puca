@@ -392,5 +392,129 @@ describe("RunMutationSession (memory adapters)", () => {
         expect(second.statuses[0]?.status).toBe("Killed");
       });
     });
+
+    describe("when a mutant times out (SC-503)", () => {
+      it("should not persist Timeout in the cache", async () => {
+        const cwd = await makeTempCwd();
+        const harness = createCacheHarness(cwd);
+        const source = abs(cwd, "src/foo.ts");
+        const site = siteFor(source, cwd, 48, "Arithmetic", "+", "-");
+        await seedCoveredMutant({ ...harness, cwd, site });
+        harness.testRunner.relatedResult = { kind: "timeout" };
+
+        await harness.useCase.execute({ cwd, cache: true });
+        const raw = await fs.readFile(harness.cachePath, "utf8");
+        expect(raw).not.toMatch(/Timeout/);
+
+        const cache = new FileHashCache(cwd);
+        await fs.writeFile(
+          path.join(cwd, ".puca", "cache.json"),
+          JSON.stringify({
+            schemaVersion: CACHE_SCHEMA_VERSION,
+            engineVersion: CACHE_ENGINE_VERSION,
+            entries: {
+              stale: {
+                status: "Timeout",
+                schemaVersion: CACHE_SCHEMA_VERSION,
+              },
+            },
+          }),
+          "utf8",
+        );
+        await cache.load();
+        expect(cache.get("stale")).toBeUndefined();
+      });
+    });
+  });
+
+  describe("when one candidate fails to parse (SC-502)", () => {
+    it("should skip that file and score the remaining sites", async () => {
+      const cwd = await makeTempCwd();
+      const mutator = new FakeMutatorEngine();
+      const testRunner = new FakeTestRunner();
+      const files = new InMemoryFiles(cwd);
+      const sourceLocator = new InMemorySourceLocator();
+      const report = new RecordingReport();
+      const useCase = new RunMutationSessionUseCase({
+        mutator,
+        testRunner,
+        sourceLocator,
+        files,
+        report,
+      });
+
+      const bad = abs(cwd, "src/bad.ts");
+      const good = abs(cwd, "src/good.ts");
+      const spec = abs(cwd, "test/foo.test.ts");
+      const site = siteFor(good, cwd, 48, "Arithmetic", "+", "-");
+      files.seed(bad, "not ts {");
+      files.seed(good, "export const add = (a: number, b: number) => a + b;\n");
+      files.seed(spec, "import { add } from '../src/good.ts';\n");
+      sourceLocator.setCandidates([bad, good]);
+      mutator.discoverErrorFor = bad;
+      mutator.discoverError = new Error("parse failed");
+      mutator.setSites(good, [site]);
+      testRunner.setAllSpecs([spec]);
+      testRunner.setStaticImports({ [spec]: [good] });
+      testRunner.relatedResult = {
+        kind: "failed",
+        failingTestId: "adds",
+      };
+
+      const result = await useCase.execute({ cwd });
+
+      expect(report.notices.some((line) => line.includes("src/bad.ts"))).toBe(
+        true,
+      );
+      expect(result.statuses).toEqual([
+        { site, status: "Killed", killedBy: "adds" },
+      ]);
+      expect(result.exitCode).toBe(0);
+    });
+  });
+
+  describe("when hunk lineRanges exclude a site (SC-505)", () => {
+    it("should score only sites on dirty lines", async () => {
+      const cwd = await makeTempCwd();
+      const mutator = new FakeMutatorEngine();
+      const testRunner = new FakeTestRunner();
+      const files = new InMemoryFiles(cwd);
+      const sourceLocator = new InMemorySourceLocator();
+      const report = new RecordingReport();
+      const useCase = new RunMutationSessionUseCase({
+        mutator,
+        testRunner,
+        sourceLocator,
+        files,
+        report,
+      });
+
+      const source = abs(cwd, "src/foo.ts");
+      const spec = abs(cwd, "test/foo.test.ts");
+      const kept = siteFor(source, cwd, 10, "Arithmetic", "+", "-");
+      const dropped = {
+        ...siteFor(source, cwd, 40, "Arithmetic", "-", "+"),
+        line: 8,
+      };
+      const keptOnLine = { ...kept, line: 2 };
+      files.seed(source, "a + b;\nc - d;\n");
+      files.seed(spec, "import './foo.ts';\n");
+      sourceLocator.setCandidatesWithRanges([
+        { file: source, lineRanges: [{ start: 2, end: 2 }] },
+      ]);
+      mutator.setSites(source, [keptOnLine, dropped]);
+      testRunner.setAllSpecs([spec]);
+      testRunner.setStaticImports({ [spec]: [source] });
+      testRunner.relatedResult = {
+        kind: "failed",
+        failingTestId: "t",
+      };
+
+      const result = await useCase.execute({ cwd });
+
+      expect(result.statuses).toHaveLength(1);
+      expect(result.statuses[0]?.site).toEqual(keptOnLine);
+      expect(result.statuses[0]?.status).toBe("Killed");
+    });
   });
 });

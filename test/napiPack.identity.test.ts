@@ -72,7 +72,7 @@ describe("Packed tarball identity", () => {
       const parsed = JSON.parse(stdout.trim()) as Array<{ filename: string }>;
       expect(parsed.length).toBeGreaterThanOrEqual(1);
       rootTarball = path.join(packDir, parsed[0]!.filename);
-      expect(rootTarball).toMatch(/puca-0\.2\.0\.tgz$/);
+      expect(rootTarball).toMatch(/puca-0\.3\.0\.tgz$/);
 
       const { stdout: listing } = await execFileAsync("tar", ["tzf", rootTarball]);
       const entries = listing
@@ -105,7 +105,7 @@ describe("Packed tarball identity", () => {
           libc?: string[];
         };
         expect(raw.name).toBe(stub.name);
-        expect(raw.version).toBe("0.2.0");
+        expect(raw.version).toBe("0.3.0");
         expect(raw.main).toBe(stub.main);
         expect(raw.files).toEqual([stub.main]);
         expect(raw.os).toEqual(stub.os);

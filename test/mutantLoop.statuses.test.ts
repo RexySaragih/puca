@@ -180,6 +180,7 @@ describe("Sequential mutant loop statuses", () => {
         { site: sitePass, status: "Survived" },
       ]);
       expect(result.exitCode).toBe(1);
+      expect(testRunner.cancelCount).toBe(1);
       expect(testRunner.respawnCount).toBe(1);
       expect(testRunner.runRelatedCalls).toHaveLength(2);
       expect(testRunner.runRelatedCalls[1]?.mutatedSource).toContain("*");
@@ -567,7 +568,7 @@ describe("Concurrent mutant scoring (workers >= 2)", () => {
 
   describe("when a file has no related specs (AC3)", () => {
     it("should mark NoCoverage without calling runRelated", async () => {
-      const { useCase, mutator, testRunner, files, sourceLocator } =
+      const { useCase, mutator, testRunner, files, sourceLocator, report } =
         createHarness();
       const source = abs("src/orphan.ts");
       const site = siteFor(source, 0, "Arithmetic", "+", "-");
@@ -582,6 +583,10 @@ describe("Concurrent mutant scoring (workers >= 2)", () => {
 
       expect(result.statuses).toEqual([{ site, status: "NoCoverage" }]);
       expect(testRunner.runRelatedCalls).toHaveLength(0);
+      expect(report.notices).toContain(
+        "ℹ 1 NoCoverage mutant. Pass --fail-on-no-coverage to fail the run.",
+      );
+      expect(result.exitCode).toBe(0);
     });
   });
 

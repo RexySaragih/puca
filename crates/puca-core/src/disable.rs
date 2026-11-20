@@ -13,6 +13,7 @@ const KNOWN_MUTATORS: &[&str] = &[
     "BooleanLiteral",
     "LogicalOperator",
     "ConditionalExpression",
+    "UnaryOperator",
 ];
 
 /// Operator set for a next-line directive: all mutators, or a named subset.

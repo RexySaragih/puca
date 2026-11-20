@@ -12,6 +12,8 @@ export class FakeMutatorEngine implements MutatorEnginePort {
   private disabledByDirective = 0;
   private skippedByHeuristic = 0;
   private warnings: readonly string[] = [];
+  discoverErrorFor: AbsolutePath | undefined;
+  discoverError: Error | undefined;
 
   setSites(file: AbsolutePath, sites: readonly Site[]): void {
     this.sitesByFile.set(file, sites);
@@ -30,6 +32,12 @@ export class FakeMutatorEngine implements MutatorEnginePort {
   }
 
   async discover(file: AbsolutePath, _source: string): Promise<DiscoverResult> {
+    if (this.discoverError != null && this.discoverErrorFor === file) {
+      throw this.discoverError;
+    }
+    if (this.discoverError != null && this.discoverErrorFor == null) {
+      throw this.discoverError;
+    }
     return {
       sites: this.sitesByFile.get(file) ?? [],
       disabledByDirective: this.disabledByDirective,

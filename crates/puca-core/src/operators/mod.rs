@@ -5,14 +5,14 @@ mod boolean;
 mod conditional;
 mod equality;
 mod logical;
+mod unary;
 
 use crate::site::Site;
 use oxc_ast::ast::{
     BinaryExpression, BooleanLiteral, ConditionalExpression, DoWhileStatement, IfStatement,
-    LogicalExpression, Program, TemplateLiteral, WhileStatement,
+    LogicalExpression, Program, TemplateLiteral, UnaryExpression, WhileStatement,
 };
 use oxc_ast_visit::{walk, Visit};
-use oxc_span::GetSpan;
 
 /// Collect mutation sites for `program` under `path` / `source`.
 pub fn collect_sites(path: &str, source: &str, program: &Program<'_>) -> Vec<Site> {
@@ -32,6 +32,11 @@ struct OperatorVisitor<'s> {
 }
 
 impl<'a> Visit<'a> for OperatorVisitor<'_> {
+    fn visit_unary_expression(&mut self, it: &UnaryExpression<'a>) {
+        unary::collect(self.path, self.source, it, &mut self.sites);
+        walk::walk_unary_expression(self, it);
+    }
+
     fn visit_binary_expression(&mut self, it: &BinaryExpression<'a>) {
         arithmetic::collect(self.path, self.source, it, &mut self.sites);
         equality::collect(self.path, self.source, it, &mut self.sites);
@@ -49,27 +54,22 @@ impl<'a> Visit<'a> for OperatorVisitor<'_> {
     }
 
     fn visit_conditional_expression(&mut self, it: &ConditionalExpression<'a>) {
-        conditional::collect_predicate(
-            self.path,
-            self.source,
-            it.test.span(),
-            &mut self.sites,
-        );
+        conditional::collect_predicate(self.path, self.source, &it.test, &mut self.sites);
         walk::walk_conditional_expression(self, it);
     }
 
     fn visit_if_statement(&mut self, it: &IfStatement<'a>) {
-        conditional::collect_predicate(self.path, self.source, it.test.span(), &mut self.sites);
+        conditional::collect_predicate(self.path, self.source, &it.test, &mut self.sites);
         walk::walk_if_statement(self, it);
     }
 
     fn visit_while_statement(&mut self, it: &WhileStatement<'a>) {
-        conditional::collect_predicate(self.path, self.source, it.test.span(), &mut self.sites);
+        conditional::collect_predicate(self.path, self.source, &it.test, &mut self.sites);
         walk::walk_while_statement(self, it);
     }
 
     fn visit_do_while_statement(&mut self, it: &DoWhileStatement<'a>) {
-        conditional::collect_predicate(self.path, self.source, it.test.span(), &mut self.sites);
+        conditional::collect_predicate(self.path, self.source, &it.test, &mut self.sites);
         walk::walk_do_while_statement(self, it);
     }
 
