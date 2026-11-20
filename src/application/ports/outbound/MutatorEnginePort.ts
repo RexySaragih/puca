@@ -2,7 +2,9 @@ import type { AbsolutePath, Site } from "../../../domain/mutant.js";
 
 export interface DiscoverResult {
   readonly sites: readonly Site[];
-  readonly disabledCount: number;
+  readonly disabledByDirective: number;
+  readonly skippedByHeuristic: number;
+  readonly warnings: readonly string[];
 }
 
 /**

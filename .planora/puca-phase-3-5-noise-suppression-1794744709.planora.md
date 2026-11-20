@@ -66,10 +66,16 @@ Traceability index (IDs for Covers):
 
 Tickets in dependency order Waves A-E. Move to Doing when starting Build. Do not implement in Plan mode. Each ticket lists Worker skills for the Build agent.
 
+## Doing
+
+In-progress Build work only. Plan mode leaves this empty.
+
+## Done
+
 ### Wave A Heuristic noise omit TCE and diagnostic calls
 - id: po_350101
 - priority: high
-- status: queued
+- status: done
 - tags: backend
 - phase: foundation
 
@@ -95,7 +101,7 @@ Parallel: no
 ### Wave B Operator-specific disable directives and warnings
 - id: po_350102
 - priority: high
-- status: queued
+- status: done
 - tags: backend
 - phase: foundation
 
@@ -121,7 +127,7 @@ Parallel: no
 ### Wave C NAPI DiscoverOutcome and MutatorEnginePort plumbing
 - id: po_350103
 - priority: high
-- status: queued
+- status: done
 - tags: backend, api
 - phase: user-story
 
@@ -147,7 +153,7 @@ Parallel: no
 ### Wave D File Summary Disabled column and verbose audit
 - id: po_350104
 - priority: high
-- status: queued
+- status: done
 - tags: backend, api
 - phase: user-story
 
@@ -173,7 +179,7 @@ Parallel: no
 ### Wave E ADR-039 docs and Phase 3.5 closeout
 - id: po_350105
 - priority: medium
-- status: queued
+- status: done
 - tags: operations, security
 - phase: polish
 
@@ -195,11 +201,3 @@ Validation: cargo test -p puca-core && npm test -- cliReport.exit && rg oxc_sema
 Done when: acceptance and validation pass
 Depends on: po_350104
 Parallel: no
-
-## Doing
-
-In-progress Build work only. Plan mode leaves this empty.
-
-## Done
-
-Completed tickets move here during Build.

@@ -10,43 +10,74 @@ export interface FileSummaryRow {
   readonly timeout: number;
   readonly noCoverage: number;
   readonly error: number;
+  /** Suppressed sites (directive + heuristic); omitted from row when column hidden. */
+  readonly disabled?: number;
   /** Informational Kill% token (`75%` or `-`); never drives exit codes. */
   readonly killPercent: string;
 }
 
+export interface FileSummaryOptions {
+  /**
+   * Per-file suppressed totals keyed by cwd-relative POSIX path.
+   * When session sum is 0 / undefined, the Disabled column is omitted (SC-406).
+   */
+  readonly disabledByFile?: Readonly<Record<string, number>>;
+}
+
 /**
- * Aggregate mutant statuses into a File Summary table (UX-004 / ADR-030).
+ * Aggregate mutant statuses into a File Summary table (UX-004 / ADR-030 / ADR-039).
  * Rows are cwd-relative POSIX paths, sorted ascending; Kill% is presentation-only.
+ * Disabled column appears only when session suppressed total > 0.
  */
 export function formatFileSummaryTable(
   statuses: readonly Mutant[],
   cwd: string,
+  options: FileSummaryOptions = {},
 ): string {
-  const rows = aggregateFileSummaryRows(statuses, cwd);
+  const rows = aggregateFileSummaryRows(statuses, cwd, options);
   if (rows.length === 0) {
     return "";
   }
 
-  const header = [
-    "File",
-    "Total",
-    "Killed",
-    "Survived",
-    "Timeout",
-    "NoCov",
-    "Error",
-    "Kill%",
-  ];
-  const body = rows.map((row) => [
-    row.file,
-    String(row.total),
-    String(row.killed),
-    String(row.survived),
-    String(row.timeout),
-    String(row.noCoverage),
-    String(row.error),
-    row.killPercent,
-  ]);
+  const showDisabled = sessionDisabledTotal(options.disabledByFile) > 0;
+  const header = showDisabled
+    ? [
+        "File",
+        "Total",
+        "Killed",
+        "Survived",
+        "Timeout",
+        "NoCov",
+        "Error",
+        "Disabled",
+        "Kill%",
+      ]
+    : [
+        "File",
+        "Total",
+        "Killed",
+        "Survived",
+        "Timeout",
+        "NoCov",
+        "Error",
+        "Kill%",
+      ];
+  const body = rows.map((row) => {
+    const cells = [
+      row.file,
+      String(row.total),
+      String(row.killed),
+      String(row.survived),
+      String(row.timeout),
+      String(row.noCoverage),
+      String(row.error),
+    ];
+    if (showDisabled) {
+      cells.push(String(row.disabled ?? 0));
+    }
+    cells.push(row.killPercent);
+    return cells;
+  });
   const widths = header.map((label, index) => {
     let max = label.length;
     for (const cells of body) {
@@ -67,6 +98,7 @@ export function formatFileSummaryTable(
 export function aggregateFileSummaryRows(
   statuses: readonly Mutant[],
   cwd: string,
+  options: FileSummaryOptions = {},
 ): FileSummaryRow[] {
   const byFile = new Map<
     string,
@@ -98,6 +130,8 @@ export function aggregateFileSummaryRows(
     bumpStatus(bucket, mutant.status);
   }
 
+  const disabledByFile = options.disabledByFile ?? {};
+  const showDisabled = sessionDisabledTotal(disabledByFile) > 0;
   const rows: FileSummaryRow[] = [...byFile.entries()]
     .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
     .map(([file, counts]) => ({
@@ -108,6 +142,7 @@ export function aggregateFileSummaryRows(
       timeout: counts.timeout,
       noCoverage: counts.noCoverage,
       error: counts.error,
+      disabled: showDisabled ? (disabledByFile[file] ?? 0) : undefined,
       killPercent: formatKillPercent(counts.killed, counts.survived),
     }));
 
@@ -120,6 +155,19 @@ export function formatKillPercent(killed: number, survived: number): string {
     return "-";
   }
   return `${String(Math.round((100 * killed) / denom))}%`;
+}
+
+function sessionDisabledTotal(
+  disabledByFile: Readonly<Record<string, number>> | undefined,
+): number {
+  if (disabledByFile == null) {
+    return 0;
+  }
+  let total = 0;
+  for (const value of Object.values(disabledByFile)) {
+    total += value;
+  }
+  return total;
 }
 
 function bumpStatus(

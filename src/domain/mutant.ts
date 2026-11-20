@@ -41,6 +41,11 @@ export interface SessionResult {
   readonly exitCode: number;
   /** Idle / refuse diagnostic for terminal or stderr (CLI maps this). */
   readonly message?: string;
-  /** --verbose footer (histogram, disable count, respawns). */
+  /** --verbose footer (histogram, suppression summary, respawns). */
   readonly verboseFooter?: string;
+  /**
+   * Per-file suppressed site totals (directive + heuristic), keyed by
+   * cwd-relative POSIX path. Terminal File Summary only; not JSON/HTML/SARIF.
+   */
+  readonly disabledByFile?: Readonly<Record<string, number>>;
 }

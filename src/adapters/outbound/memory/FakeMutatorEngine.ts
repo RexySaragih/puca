@@ -9,20 +9,32 @@ import type { AbsolutePath, Site } from "../../../domain/mutant.js";
  */
 export class FakeMutatorEngine implements MutatorEnginePort {
   private readonly sitesByFile = new Map<string, readonly Site[]>();
-  private disabledCount = 0;
+  private disabledByDirective = 0;
+  private skippedByHeuristic = 0;
+  private warnings: readonly string[] = [];
 
   setSites(file: AbsolutePath, sites: readonly Site[]): void {
     this.sitesByFile.set(file, sites);
   }
 
-  setDisabledCount(count: number): void {
-    this.disabledCount = count;
+  setDisabledByDirective(count: number): void {
+    this.disabledByDirective = count;
+  }
+
+  setSkippedByHeuristic(count: number): void {
+    this.skippedByHeuristic = count;
+  }
+
+  setWarnings(warnings: readonly string[]): void {
+    this.warnings = warnings;
   }
 
   async discover(file: AbsolutePath, _source: string): Promise<DiscoverResult> {
     return {
       sites: this.sitesByFile.get(file) ?? [],
-      disabledCount: this.disabledCount,
+      disabledByDirective: this.disabledByDirective,
+      skippedByHeuristic: this.skippedByHeuristic,
+      warnings: this.warnings,
     };
   }
 

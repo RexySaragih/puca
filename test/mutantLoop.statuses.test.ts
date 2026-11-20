@@ -263,7 +263,8 @@ describe("Sequential mutant loop statuses", () => {
         sites: [siteHang, siteEq],
         sourceFile: source,
       });
-      mutator.setDisabledCount(3);
+      mutator.setDisabledByDirective(2);
+      mutator.setSkippedByHeuristic(1);
       testRunner.queueRelatedBehaviors("hang", { kind: "passed" });
 
       const result = await useCase.execute({
@@ -277,13 +278,46 @@ describe("Sequential mutant loop statuses", () => {
       expect(report.notices).toContain(
         "Mutators: ArithmeticOperator: 1, EqualityOperator: 1",
       );
-      expect(report.notices).toContain("Disable-comment sites omitted: 3");
+      expect(report.notices).toContain(
+        "Suppression summary: 2 skipped via comment directives, 1 skipped via auto-heuristics.",
+      );
       expect(result.verboseFooter).toContain("ArithmeticOperator: 1");
       expect(result.verboseFooter).toContain("EqualityOperator: 1");
       expect(result.verboseFooter).toContain(
-        "Disable-comment sites omitted: 3",
+        "Suppression summary: 2 skipped via comment directives, 1 skipped via auto-heuristics.",
       );
       expect(result.verboseFooter).toContain("Vitest respawns: 1");
+      expect(result.disabledByFile).toEqual({ "src/foo.ts": 3 });
+    });
+
+    it("should write notices for directive warnings without forcing exit 2 (SC-402/405)", async () => {
+      const { useCase, mutator, testRunner, files, sourceLocator, report } =
+        createHarness();
+      const source = abs("src/foo.ts");
+      const site = siteFor(source, 10, "EqualityOperator", "===", "!==");
+      await seedCoveredFile({
+        files,
+        mutator,
+        testRunner,
+        sourceLocator,
+        sites: [site],
+        sourceFile: source,
+      });
+      mutator.setWarnings([
+        "Unknown mutator in puca-disable-next-line: `NoSuchOp`",
+      ]);
+      testRunner.queueRelatedBehaviors({ kind: "failed" });
+
+      const result = await useCase.execute({
+        cwd,
+        verbose: true,
+        timeoutMs: 40,
+      });
+
+      expect(report.notices).toContain(
+        "Unknown mutator in puca-disable-next-line: `NoSuchOp`",
+      );
+      expect(result.exitCode).not.toBe(2);
     });
   });
 

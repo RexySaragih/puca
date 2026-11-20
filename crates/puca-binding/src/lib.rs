@@ -62,11 +62,13 @@ pub fn discover(filename: String, source: String) -> Result<Vec<SiteDto>> {
         .map_err(|err| Error::from_reason(err.to_string()))
 }
 
-/// Discover sites plus how many operator sites `// puca-disable*` omitted.
+/// Discover sites plus directive/heuristic omit counts and warnings (ADR-039).
 #[napi(object)]
 pub struct DiscoverOutcomeDto {
     pub sites: Vec<SiteDto>,
-    pub disabled_count: u32,
+    pub disabled_by_directive: u32,
+    pub skipped_by_heuristic: u32,
+    pub warnings: Vec<String>,
 }
 
 #[napi]
@@ -74,7 +76,9 @@ pub fn discover_outcome(filename: String, source: String) -> Result<DiscoverOutc
     puca_core::discover_outcome(&filename, &source)
         .map(|outcome| DiscoverOutcomeDto {
             sites: outcome.sites.into_iter().map(SiteDto::from).collect(),
-            disabled_count: outcome.disabled_count as u32,
+            disabled_by_directive: outcome.disabled_by_directive as u32,
+            skipped_by_heuristic: outcome.skipped_by_heuristic as u32,
+            warnings: outcome.warnings,
         })
         .map_err(|err| Error::from_reason(err.to_string()))
 }

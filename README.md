@@ -187,9 +187,9 @@ Realtime while scoring (not only a dump at the end):
   src/b.ts                  2       0         0        1      1      0     -
   ```
 
-  Kill% = `Killed / (Killed + Survived)` as an integer percent (`-` when that denominator is 0). Informational only — does not change exit codes. Expressions inside template literals (`` `${…}` ``, tagged or untagged) are never mutated.
+  Kill% = `Killed / (Killed + Survived)` as an integer percent (`-` when that denominator is 0). Informational only — does not change exit codes. Expressions inside template literals (`` `${…}` ``, tagged or untagged) are never mutated. When discovery suppressions exist, a `Disabled` column appears (directive + heuristic omits per file); otherwise that column is omitted.
 - Default git targeting that skips untracked `.ts` / `.tsx` prints: `ℹ N untracked files skipped…`
-- `--verbose` adds selected files, mutator histogram, disable-omit count, and Vitest respawns
+- `--verbose` adds selected files, mutator histogram, `Suppression summary: N skipped via comment directives, M skipped via auto-heuristics.`, and Vitest respawns
 
 ### `--json` schema
 
@@ -231,17 +231,22 @@ flowchart TD
 
 `**/*.{test,spec}.{ts,tsx}`, `**/vitest.config.*`, `**/vite.config.*`, `**/*.d.ts`, `**/node_modules/**`, `**/dist/**`
 
-### Disable comments
+### Disable comments & quiet skips
 
 ```ts
 // puca-disable-next-line
-return a + b;
+return a + b && c; // all mutators on this line omitted
+
+// puca-disable-next-line EqualityOperator
+return a + b === c; // only EqualityOperator omitted; ArithmeticOperator remains
 
 // puca-disable
 // …all later sites in this file omitted
 ```
 
-Stryker-style disable comments are **ignored**.
+Stryker-style and block `/* puca-disable */` comments are **ignored**. Unknown mutator tokens in a next-line list warn on stderr; known tokens still apply.
+
+**Auto-heuristics (no directive needed):** sites inside `console.*` / `logger.*` (`log|info|warn|error|debug|trace`) argument subtrees, and closed trivial arithmetic on plain numeric `0`/`1` (`x+0`, `0+x`, `x-0`, `x*1`, `1*x`, `x/1`), are omitted at discovery. `0 - x` and `x + ""` stay discoverable.
 
 ---
 

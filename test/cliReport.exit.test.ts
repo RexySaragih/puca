@@ -760,6 +760,65 @@ describe("CLI terminal report and exit codes", () => {
       expect(err.text()).toContain("── Verbose ──");
       expect(err.text()).not.toContain("── File Summary ──");
     });
+
+    it("should omit Disabled column when session suppressed total is 0 (SC-406)", async () => {
+      const cwd = "/tmp/puca-file-summary-no-disabled";
+      const file = toAbsolutePath(path.join(cwd, "src/a.ts"));
+      const out = captureStream();
+
+      await new StdioReport({ cwd, stdout: out.stream }).writeTerminal({
+        statuses: [
+          {
+            site: siteFor(cwd, file, 1, "ArithmeticOperator", "+", "-"),
+            status: "Killed",
+            killedBy: "t",
+          },
+        ],
+        exitCode: 0,
+      });
+
+      expect(out.text()).toContain("── File Summary ──");
+      expect(out.text()).not.toContain("Disabled");
+    });
+
+    it("should show Disabled column with per-file sums when suppressed > 0 (SC-406)", async () => {
+      const cwd = "/tmp/puca-file-summary-disabled";
+      const fileA = toAbsolutePath(path.join(cwd, "src/a.ts"));
+      const fileB = toAbsolutePath(path.join(cwd, "src/b.ts"));
+      const out = captureStream();
+      const err = captureStream();
+
+      await new StdioReport({
+        cwd,
+        stdout: out.stream,
+        stderr: err.stream,
+      }).writeTerminal({
+        statuses: [
+          {
+            site: siteFor(cwd, fileA, 1, "ArithmeticOperator", "+", "-"),
+            status: "Killed",
+            killedBy: "t",
+          },
+          {
+            site: siteFor(cwd, fileB, 1, "EqualityOperator", "===", "!=="),
+            status: "Survived",
+          },
+        ],
+        exitCode: 1,
+        disabledByFile: { "src/a.ts": 2, "src/b.ts": 1 },
+        verboseFooter:
+          "Suppression summary: 2 skipped via comment directives, 1 skipped via auto-heuristics.",
+      });
+
+      const text = out.text();
+      expect(text).toContain("Disabled");
+      const table = text.slice(text.indexOf("── File Summary ──"));
+      expect(table).toMatch(/src\/a\.ts\s+1\s+1\s+0\s+0\s+0\s+0\s+2\s+100%/);
+      expect(table).toMatch(/src\/b\.ts\s+1\s+0\s+1\s+0\s+0\s+0\s+1\s+0%/);
+      expect(err.text()).toContain(
+        "Suppression summary: 2 skipped via comment directives, 1 skipped via auto-heuristics.",
+      );
+    });
   });
 
   describe("when --json is requested (AC4)", () => {

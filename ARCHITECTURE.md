@@ -101,7 +101,7 @@ Composition root is the **only** place that chooses prod vs fake adapters. Do no
 | `TestRunnerPort` | Session, reverse map, baseline, runRelated, respawn (**unexported**) | `VitestTestRunner` (default) / `JestTestRunner` (`--runner jest`) | `FakeTestRunner` |
 | `SourceLocatorPort` | Candidate files | `GitDiffLocator` | `InMemorySourceLocator` |
 | `WorkspaceFilesPort` | `readUtf8` / `exists` / `isUnderCwd` | `NodeWorkspaceFiles` | `InMemoryFiles` |
-| `ReportPort` | Terminal (+ optional JSON / SARIF / HTML); File Summary is StdioReport-only (ADR-030); `writeSarif?` (ADR-033); `writeHtml?` (ADR-034) | `StdioReport` + `SchemaJsonFile` + `SarifFile` + `HtmlFile` | `RecordingReport` |
+| `ReportPort` | Terminal (+ optional JSON / SARIF / HTML); File Summary is StdioReport-only (ADR-030); optional `Disabled` column when session suppressions > 0 (ADR-039); `writeSarif?` (ADR-033); `writeHtml?` (ADR-034) | `StdioReport` + `SchemaJsonFile` + `SarifFile` + `HtmlFile` | `RecordingReport` |
 | `CachePort` | Opt-in status metadata cache (`--cache`); never mutated source (ADR-035) | `FileHashCache` | memory / no-op |
 | `WorkspaceDiscoveryPort` | Resolve package roots for `--workspace` glob (ADR-036) | `NodeWorkspaceDiscovery` | fixture discovery |
 
@@ -249,6 +249,7 @@ Missing `.node` after clone → exit 2 until `npm run build`.
 | ADR-036 | `WorkspaceDiscoveryPort` + sequential package sessions; worst-of exit `2 > 1 > 0` |
 | ADR-037 | `JestTestRunner` single-worker; soft-force `workers=1` under `--runner jest` |
 | ADR-038 | Phase 3 distribution remains GitHub Releases only; npm registry publish deferred to Phase 4 |
+| ADR-039 | Discovery noise suppression: collect→heuristic filter→directive filter; `disabledByDirective` + `skippedByHeuristic` + `warnings`; terminal-only File Summary `Disabled` column; no `oxc_semantic`; no sixth scored status; `--json`/HTML/SARIF unchanged. **ADR-035 remains CachePort** — this ID is noise suppression only. |
 
 ---
 

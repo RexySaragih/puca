@@ -177,6 +177,7 @@ export class RunMutationSessionUseCase implements RunMutationSession {
                 this.deps.testRunner.recycleCount ?? 0,
               )
             : undefined,
+        disabledByFile: buildDisabledByFile(discovered, input.cwd),
       },
       artifactPaths(input),
     );
@@ -476,12 +477,16 @@ export class RunMutationSessionUseCase implements RunMutationSession {
       const source = await this.deps.files.readUtf8(file);
       const found = await this.deps.mutator.discover(file, source);
       const related = lookupRelated(reverse, file);
+      for (const warning of found.warnings) {
+        this.deps.report.writeNotice?.(warning);
+      }
       discovered.push({
         file,
         originalSource: source,
         sites: found.sites,
         related,
-        disabledCount: found.disabledCount,
+        disabledByDirective: found.disabledByDirective,
+        skippedByHeuristic: found.skippedByHeuristic,
       });
     }
     return discovered;
@@ -514,11 +519,9 @@ export class RunMutationSessionUseCase implements RunMutationSession {
   }
 
   private emitDiscoverDiagnostics(discovered: readonly DiscoveredFile[]): void {
-    const { histogramLine, disabledCount } = summarizeDiscover(discovered);
-    this.deps.report.writeNotice?.(`Mutators: ${histogramLine}`);
-    this.deps.report.writeNotice?.(
-      `Disable-comment sites omitted: ${String(disabledCount)}`,
-    );
+    const summary = summarizeDiscover(discovered);
+    this.deps.report.writeNotice?.(`Mutators: ${summary.histogramLine}`);
+    this.deps.report.writeNotice?.(formatSuppressionSummary(summary));
   }
 
   private async reportRefuse(
@@ -579,17 +582,23 @@ interface DiscoveredFile {
   readonly originalSource: string;
   readonly sites: readonly Site[];
   readonly related: readonly string[];
-  readonly disabledCount: number;
+  readonly disabledByDirective: number;
+  readonly skippedByHeuristic: number;
 }
 
-function summarizeDiscover(discovered: readonly DiscoveredFile[]): {
-  histogramLine: string;
-  disabledCount: number;
-} {
+interface DiscoverSummary {
+  readonly histogramLine: string;
+  readonly disabledByDirective: number;
+  readonly skippedByHeuristic: number;
+}
+
+function summarizeDiscover(discovered: readonly DiscoveredFile[]): DiscoverSummary {
   const histogram = new Map<string, number>();
-  let disabledCount = 0;
+  let disabledByDirective = 0;
+  let skippedByHeuristic = 0;
   for (const entry of discovered) {
-    disabledCount += entry.disabledCount;
+    disabledByDirective += entry.disabledByDirective;
+    skippedByHeuristic += entry.skippedByHeuristic;
     for (const site of entry.sites) {
       histogram.set(site.mutatorName, (histogram.get(site.mutatorName) ?? 0) + 1);
     }
@@ -599,7 +608,32 @@ function summarizeDiscover(discovered: readonly DiscoveredFile[]): {
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([name, count]) => `${name}: ${String(count)}`)
       .join(", ") || "(none)";
-  return { histogramLine, disabledCount };
+  return { histogramLine, disabledByDirective, skippedByHeuristic };
+}
+
+function formatSuppressionSummary(summary: DiscoverSummary): string {
+  return (
+    `Suppression summary: ${String(summary.disabledByDirective)} skipped via comment directives, ` +
+    `${String(summary.skippedByHeuristic)} skipped via auto-heuristics.`
+  );
+}
+
+function buildDisabledByFile(
+  discovered: readonly DiscoveredFile[],
+  cwd: string,
+): Record<string, number> | undefined {
+  const map: Record<string, number> = {};
+  let sessionTotal = 0;
+  for (const entry of discovered) {
+    const total = entry.disabledByDirective + entry.skippedByHeuristic;
+    if (total <= 0) {
+      continue;
+    }
+    const rel = relativeToCwd(cwd, entry.file);
+    map[rel] = (map[rel] ?? 0) + total;
+    sessionTotal += total;
+  }
+  return sessionTotal > 0 ? map : undefined;
 }
 
 function formatVerboseFooter(
@@ -608,10 +642,10 @@ function formatVerboseFooter(
   workers: number,
   recycleCount: number,
 ): string {
-  const { histogramLine, disabledCount } = summarizeDiscover(discovered);
+  const summary = summarizeDiscover(discovered);
   const lines = [
-    `Mutators: ${histogramLine}`,
-    `Disable-comment sites omitted: ${String(disabledCount)}`,
+    `Mutators: ${summary.histogramLine}`,
+    formatSuppressionSummary(summary),
   ];
   if (workers >= 2) {
     lines.push(`Worker recycles (timeout+RSS): ${String(recycleCount)}`);

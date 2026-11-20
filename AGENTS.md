@@ -19,7 +19,7 @@ flowchart LR
 3. **Mutants never touch disk.** Intentional writes only: `--json`, `--sarif`, `--html`, and opt-in `--cache` (`.puca/cache.json` metadata). RAM inject + invalidate after every mutant (R1). Never store mutated source in cache.
 4. **A6 targeting lock** — idle empty git-dirty → exit **0**; empty `--mutate` → **2**; not-a-git without `--mutate` → **2** with the exact stderr string. No-flag defaults stay Phase 1–3.3 (SC-346).
 5. **Behavioral tests** — name by behavior (`when … / should …`), mock I/O boundaries only, prefer Given/When/Then. Prefer extending `test/*.test.ts` over 1:1 class mirrors.
-6. **Do not hand-edit Planora lane status** when Planora MCP is connected — use `move_card` / `update_card` with the active board path (Phase 3.4: `.planora/puca-phase-3-4-1794712087.planora.md`).
+6. **Do not hand-edit Planora lane status** when Planora MCP is connected — use `move_card` / `update_card` with the active board path (Phase 3.5: `.planora/puca-phase-3-5-noise-suppression-1794744709.planora.md`).
 
 ```mermaid
 flowchart BT
@@ -72,7 +72,7 @@ flowchart LR
 | Reports / File Summary / SARIF / HTML | `src/adapters/outbound/report/` (`StdioReport`, `formatFileSummaryTable`, `SarifFile`, `HtmlFile`) |
 | Opt-in disk cache | `src/adapters/outbound/cache/FileHashCache.ts`, `src/application/ports/outbound/CachePort.ts` |
 | Workspace discovery / sequential sessions | `src/adapters/outbound/workspace/NodeWorkspaceDiscovery.ts`, `src/application/WorkspaceTargetResolver.ts` |
-| Operators / disable / apply / TemplateLiteral skip | `crates/puca-core/src/` (`operators/mod.rs` `visit_template_literal`) |
+| Operators / disable / heuristics / apply / TemplateLiteral skip | `crates/puca-core/src/` (`operators/`, `disable.rs`, `heuristics.rs`) |
 | NAPI surface | `crates/puca-binding/`, `src/adapters/outbound/napi/` |
 | Fixture oracle | `fixtures/loop/`, `test/e2e.loopFixture.test.ts` |
 
@@ -106,7 +106,8 @@ After changing Rust operators or NAPI: `npm run build` before `npm test -- napiM
 - Operators live under `crates/puca-core/src/operators/`; discovery uses oxc `Visit`.
 - Sites are UTF-8 **byte offsets** into the original source; `apply` is a splice, never AST reprint.
 - **TemplateLiteral** expressions are skipped (`visit_template_literal` must not call `walk_template_literal`).
-- Disable comments are Púca-only (`// puca-disable-next-line`, `// puca-disable`); ignore Stryker directives.
+- Discovery pipeline: collect → Stage-1 heuristics (`heuristics.rs`) → Stage-2 disable directives (`disable.rs`). Outcome counters: `disabledByDirective`, `skippedByHeuristic`, plus `warnings`.
+- Disable comments are Púca-only: bare / named `// puca-disable-next-line`, `// puca-disable`. Ignore Stryker directives and block `/* puca-disable */`. No `oxc_semantic`.
 - After Rust/NAPI changes: `npm run build` then `cargo test -p puca-core` and relevant TS tests.
 
 ## Patterns to prefer

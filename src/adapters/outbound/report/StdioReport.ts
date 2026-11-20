@@ -117,8 +117,13 @@ export class StdioReport implements ReportPort {
 
     this.stdout.write(`${formatSummary(result.statuses)}\n`);
     // ADR-030 / SC-325: File Summary only when scored statuses exist.
+    // ADR-039 / SC-406: optional Disabled column when session suppressed > 0.
     if (result.statuses.length >= 1) {
-      this.stdout.write(`${formatFileSummaryTable(result.statuses, this.cwd)}\n`);
+      this.stdout.write(
+        `${formatFileSummaryTable(result.statuses, this.cwd, {
+          disabledByFile: result.disabledByFile,
+        })}\n`,
+      );
     }
     if (result.verboseFooter != null && result.verboseFooter.length > 0) {
       this.stderr.write(`${result.verboseFooter}\n`);

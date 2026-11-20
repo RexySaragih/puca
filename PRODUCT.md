@@ -74,7 +74,7 @@ flowchart TD
 
 ---
 
-## Feature roadmap (frozen at Phase 3.4)
+## Feature roadmap (through Phase 3.5 / v0.2.1)
 
 | Phase | Shipped | Deferred |
 | --- | --- | --- |
@@ -83,18 +83,19 @@ flowchart TD
 | **3.1** | GitHub Release `puca` + `puca-<abi>` tarballs | npm registry publish |
 | **3.2** | TemplateLiteral skip; File Summary | — |
 | **3.3** | `--break-on-score`, `--fail-on-no-coverage`, `--sarif` | — |
-| **3.4** (last Phase 3) | `--html`, `--cache`, `--workspace`, `--runner jest` | Jest multi-worker; CDN/Stryker UI HTML |
+| **3.4** | `--html`, `--cache`, `--workspace`, `--runner jest` | Jest multi-worker; CDN/Stryker UI HTML |
+| **3.5** (`v0.2.1`) | Discovery noise suppression + operator-specific disable directives (ADR-039) | block `/* puca-disable */`; `oxc_semantic`; npm publish |
 | **4** | — | npm publish / OIDC / `optionalDependencies` prebuilds |
 
-## What ships (through Phase 3.4)
+## What ships (through Phase 3.5)
 
 | Capability | Behavior |
 | --- | --- |
 | Targeting | Default: git dirty `.ts`/`.tsx`/`.js`/`.jsx`/`.mjs`/`.cjs` vs HEAD (untracked ignored; stderr skip notice). `--include-untracked` adds untracked files. Override: `--mutate <glob>` (tree walk). Hard excludes never mutate. |
-| Mutator | Oxc (Rust) via NAPI: arithmetic, equality, boolean, logical, conditional predicates. Lazy byte-offset apply. Phase 3.2: expressions inside any `TemplateLiteral` (`${…}`, tagged or untagged) are never mutated — no opt-in flag. |
-| Disable | `// puca-disable-next-line`, `// puca-disable` |
-| Session | One Vitest keep-alive by default (`--workers 1` / omit). Vite RAM plugin; sequential mutants; outer timeout + respawn. `--workers N` (N≥2) opts into a fork pool of isolated keep-alives (Phase 2). `--verbose` lists files, mutators, disable omissions, respawns/recycles. |
-| Report | Terminal (`file:line:col` + `-`/`+` lines + five buckets + Phase 3.2 `── File Summary ──`); optional unscoped `mutation-testing-report-schema` JSON (`--json`); Survived-only SARIF (`--sarif`); native offline HTML (`--html`) — **no** `@stryker-mutator/*` |
+| Mutator | Oxc (Rust) via NAPI: arithmetic, equality, boolean, logical, conditional predicates. Lazy byte-offset apply. Phase 3.2: expressions inside any `TemplateLiteral` (`${…}`, tagged or untagged) are never mutated — no opt-in flag. Phase 3.5: quiet skips for `console.*` / `logger.*` call args and closed trivial arithmetic (`x+0`, `x*1`, …); `0 - x` and `x + ""` stay discoverable. |
+| Disable | `// puca-disable-next-line` (all mutators on next line), `// puca-disable-next-line OpA, OpB` (named only), `// puca-disable` (rest-of-file). Unknown Op tokens warn on stderr; known tokens still apply. Block comments are ignored. |
+| Session | One Vitest keep-alive by default (`--workers 1` / omit). Vite RAM plugin; sequential mutants; outer timeout + respawn. `--workers N` (N≥2) opts into a fork pool of isolated keep-alives (Phase 2). `--verbose` lists files, mutators, suppression summary (directive vs heuristic), respawns/recycles. |
+| Report | Terminal (`file:line:col` + `-`/`+` lines + five buckets + `── File Summary ──` with optional `Disabled` column when suppressions > 0); optional unscoped `mutation-testing-report-schema` JSON (`--json`); Survived-only SARIF (`--sarif`); native offline HTML (`--html`) — **no** `@stryker-mutator/*`. JSON/HTML/SARIF do not gain Disabled fields. |
 | Cache (opt-in) | `--cache` writes metadata-only `.puca/cache.json` (status hashes; never mutated source). Off by default. |
 | Workspace (opt-in) | `--workspace <glob>` runs matching packages sequentially; process exit is worst-of `2 > 1 > 0`. |
 | Runner | Default `vitest`. `--runner jest` uses a single-worker Jest adapter (workers soft-forced to 1). |

@@ -7,12 +7,13 @@
 pub mod apply;
 pub mod disable;
 pub mod discover;
+pub mod heuristics;
 pub mod operators;
 pub mod parse;
 pub mod site;
 
 pub use apply::apply;
-pub use disable::{filter_disabled, scan_disables, DisableMap};
+pub use disable::{filter_disabled, scan_disables, DisableMap, DisableScan};
 pub use discover::{discover, discover_outcome, DiscoverOutcome};
 pub use parse::{parse, parse_ok, source_type_from_filename, ParseError};
 pub use site::{offset_to_line_column, Site};

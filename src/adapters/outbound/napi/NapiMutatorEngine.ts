@@ -26,7 +26,9 @@ export interface SiteDto {
 
 export interface DiscoverOutcomeDto {
   readonly sites: SiteDto[];
-  readonly disabledCount: number;
+  readonly disabledByDirective: number;
+  readonly skippedByHeuristic: number;
+  readonly warnings: readonly string[];
 }
 
 export interface PucaBinding {
@@ -215,13 +217,17 @@ export class NapiMutatorEngine implements MutatorEnginePort {
       const outcome = this.binding.discoverOutcome(file, source);
       return {
         sites: outcome.sites.map((dto) => siteFromDto(dto, file, source)),
-        disabledCount: outcome.disabledCount,
+        disabledByDirective: outcome.disabledByDirective,
+        skippedByHeuristic: outcome.skippedByHeuristic,
+        warnings: outcome.warnings ?? [],
       };
     }
     const dtos = this.binding.discover(file, source);
     return {
       sites: dtos.map((dto) => siteFromDto(dto, file, source)),
-      disabledCount: 0,
+      disabledByDirective: 0,
+      skippedByHeuristic: 0,
+      warnings: [],
     };
   }
 
